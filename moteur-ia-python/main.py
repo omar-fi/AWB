@@ -1,60 +1,92 @@
 import os
+import sys
+import time
+import json
+import logging
+import datetime
+import threading
+import uvicorn
+import mysql.connector
+from contextlib import asynccontextmanager
 from dotenv import load_dotenv
+from typing import Dict, Any
+from pydantic import BaseModel, Field
+from fastapi import FastAPI, Depends, HTTPException, Query, Path, Body
+from fastapi.middleware.cors import CORSMiddleware
+from security import verify_token
 
-# Chargement automatique du fichier .env s'il existe
 load_dotenv()
 
-# Vérification de la clé API au démarrage
-api_key = os.environ.get("OPENROUTER_API_KEY", "")
-if not api_key:
-    print("⚠️  OPENROUTER_API_KEY non définie — les insights seront générés en mode fallback créatif.")
-else:
-    print(f"✅ Clé OpenRouter détectée : {api_key[:12]}***")
+# ── Logging application ───────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [AWB-AI-SERVICE] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        logging.FileHandler("microservice_ia.log", encoding="utf-8"),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger("awb.main")
 
-# ── 1. Rattrapage : enrichir les prédictions sans insight ──────────────────
-print("\n" + "=" * 60)
-print("  ÉTAPE 1 — Rattrapage des insights manquants")
-print("=" * 60)
+# ──────────────────────────────────────────────────────────────────────────
+#  LIFESPAN — Démarrage & arrêt automatique du Scheduler de prédictions
+# ──────────────────────────────────────────────────────────────────────────
 
-try:
-    import time
-    import mysql.connector
-    from consumer_ia import recalculer_prediction, get_db_connection
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Context manager FastAPI :
+      • AU DÉMARRAGE  → Lance le scheduler de prédictions en arrière-plan.
+      • À L'ARRÊT    → Arrête proprement le scheduler.
+    """
+    logger.info("═" * 60)
+    logger.info("🤖  AWB AI MICROSERVICE — Démarrage en cours...")
+    logger.info("═" * 60)
 
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    from scheduler import demarrer_scheduler_background, get_scheduler
 
-    # On récupère les clients qui n'ont aucune prédiction ou dont l'insight est vide
-    cursor.execute("""
-        SELECT c.id AS client_id 
-        FROM client c
-        LEFT JOIN prediction_visite p ON c.id = p.client_id
-        WHERE p.id IS NULL OR p.insight_genai IS NULL OR p.insight_genai = ''
-    """)
-    clients = cursor.fetchall()
-    cursor.close()
-    conn.close()
+    def _lancer_avec_delai():
+        time.sleep(10)
+        logger.info("🟢 Lancement du Scheduler de Prédictions AWB...")
+        demarrer_scheduler_background(executer_maintenant=False)
+        logger.info("⏰ Scheduler actif — en attente du prochain batch nocturne...")
 
-    total = len(clients)
-    if total == 0:
-        print("✅ Tous les clients ont déjà leur prédiction IA — aucun rattrapage nécessaire.")
-    else:
-        print(f"📊 {total} client(s) sans prédiction ou insight détectés. Scan complet en cours...")
-        for index, client in enumerate(clients):
-            cid = client['client_id']
-            print(f"\n⏳ [{index + 1}/{total}] Traitement du client ID: {cid}")
-            recalculer_prediction(cid, action="INITIALISATION", type_op="", montant=0.0)
-            if index < total - 1:
-                time.sleep(1.5)  # Pause légère pour ne pas saturer l'API OpenRouter
-        print("\n✅ Initialisation IA terminée pour toute la base de données !")
+    t = threading.Thread(target=_lancer_avec_delai, name="AWB-Scheduler-Starter", daemon=True)
+    t.start()
 
-except Exception as e:
-    print(f"❌ Erreur lors du rattrapage : {e}")
+    yield
 
-# ── 2. Démarrage du Consumer Kafka (boucle infinie) ────────────────────────
-print("\n" + "=" * 60)
-print("  ÉTAPE 2 — Démarrage du Consumer Kafka (temps réel)")
-print("=" * 60)
+    try:
+        get_scheduler().arreter()
+        logger.info("🔴 Scheduler arrêté proprement.")
+    except Exception:
+        pass
 
-from consumer_ia import demarrer_ecoute
-demarrer_ecoute()
+
+app = FastAPI(
+    title="AWB AI Microservice (XGBoost)",
+    version="1.2.0",
+    lifespan=lifespan,
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ── Configuration DB ─────────────────────────────────────────────────────────
+DB_CONFIG = {
+    "host":     os.getenv("DB_HOST",     "localhost"),
+    "user":     os.getenv("DB_USER",     "root"),
+    "password": os.getenv("DB_PASSWORD", ""),
+    "database": os.getenv("DB_NAME",     "attijari_predict_db"),
+    "use_pure": True,
+}
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

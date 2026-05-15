@@ -1,0 +1,1 @@
+0 0 * * * cd /Users/omarfilali/Desktop/AWB/moteur-ia-python && /Users/omarfilali/Desktop/AWB/moteur-ia-python/venv/bin/python3 nightly_batch.py >> nightly_batch.log 2>&1

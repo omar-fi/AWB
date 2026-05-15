@@ -1,0 +1,129 @@
+@startuml Diagramme5_Architecture_Globale
+
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 8
+skinparam ParticipantPadding 15
+skinparam defaultFontName Arial
+
+skinparam participant {
+    BackgroundColor #2C2C2C
+    FontColor #FFFFFF
+    BorderColor #E8391D
+}
+skinparam sequence {
+    ArrowColor #E8391D
+    LifeLineBorderColor #AAAAAA
+    LifeLineBackgroundColor #F0F0F0
+    GroupBackgroundColor #EDE7F6
+    GroupBorderColor #7E57C2
+    DividerBackgroundColor #ECEFF1
+    DividerBorderColor #90A4AE
+    NoteBackgroundColor #FFFBE6
+    NoteBorderColor #FFC000
+}
+
+title AWB IA Predictive -- [5] Architecture Globale (Vue d'ensemble)
+
+participant "Cron\n00h00 Maroc" as CRON
+participant "Moteur IA\nPython" as PY
+participant "XGBoost\nModels (.pkl)" as XGB
+participant "Groq API\n(LLM)" as LLM
+participant "MySQL\nattijari_predict_db" as DB
+participant "Spring Boot\npredict-backend" as SPRING
+participant "Keycloak\nOAuth2/OIDC" as KC
+participant "React\nFrontend" as REACT
+
+== NUIT : Batch Automatique ==
+
+CRON -> PY : Declencher batch nocturne\n(scheduler.py -> nightly_batch.py)
+activate PY
+
+PY -> DB : SELECT id FROM client
+activate DB
+DB --> PY : [liste client_ids]
+deactivate DB
+
+PY -> XGB : Prediction visite\n(score, date, heure, operation)
+activate XGB
+XGB --> PY : probabilite + planning
+deactivate XGB
+
+PY -> LLM : Generer insight IA\n(contexte profil + risque churn)
+activate LLM
+LLM --> PY : "Sante bancaire | Strategie retention"
+deactivate LLM
+
+PY -> DB : UPSERT prediction_visite\n(score, date, insight, strategie, risque)
+activate DB
+DB --> PY : Predictions sauvegardees [OK]
+deactivate DB
+
+PY --> CRON : Batch termine [OK]
+deactivate PY
+
+== JOUR : Consultation Dashboard ==
+
+REACT -> KC : Authentification OAuth2/OIDC
+activate KC
+KC --> REACT : JWT Token\n{role, agenceId, permissions[]}
+deactivate KC
+
+note over REACT, KC
+  Roles : CONSEILLER / PORTEFEUILLEUR / DIRECTEUR
+  Permissions RBAC deleguees par le Directeur :
+  CAN_ANALYZE_CLIENTS, CAN_EDIT_CLIENT,
+  CAN_CREATE_ACCOUNT, CAN_DELETE_ACCOUNT
+end note
+
+REACT -> SPRING : GET /api/v1/predictions/agence/{agenceId}\nBearer JWT
+activate SPRING
+SPRING -> SPRING : Verifier JWT + autorisation agence
+SPRING -> DB : SELECT predictions + clients (agence)
+activate DB
+DB --> SPRING : Donnees IA enrichies
+deactivate DB
+SPRING --> REACT : JSON [prediction + client + insight]
+deactivate SPRING
+
+== Affichage adaptatif (RBAC) ==
+
+alt PORTEFEUILLEUR / DIRECTEUR / CAN_ANALYZE_CLIENTS
+    REACT -> REACT : PredictionCard (vue complete) :\n- Score probabilite\n- Insight GenAI (Groq LLM)\n- Strategie prescrite\n- Niveau risque (badge)\n- Diagnostic IA (collapsible)
+else CONSEILLER standard
+    REACT -> REACT : ConseillerPredictionCard (vue simplifiee) :\n- Operation prevue\n- Service de retention\n- Bouton "Enregistrer vente"
+end
+
+== KPI Directeur ==
+
+REACT -> SPRING : GET /api/v1/stats/risques?agenceId=X
+activate SPRING
+SPRING -> DB : Agregation niveaux risque par agence
+activate DB
+DB --> SPRING : {FAIBLE, ALERTE, ELEVE, CRITIQUE}
+deactivate DB
+SPRING --> REACT : Stats portefeuille
+deactivate SPRING
+
+REACT -> SPRING : GET /api/v1/admin/kpi?agenceId=X
+activate SPRING
+SPRING -> DB : Taux conversion + performance agence
+activate DB
+DB --> SPRING : KPI agreges
+deactivate DB
+SPRING --> REACT : Metriques agence
+deactivate SPRING
+
+note over CRON, REACT
+  Stack complet AWB IA Predictive :
+  -------------------------------------------------------
+  Python  : scheduler.py -> nightly_batch.py -> consumer_ia.py
+            agent_ia.py (MCP) <-> mcp_ia_server.py
+            XGBoost (.pkl) + Groq LLM (llama-3.1-8b)
+            analysis_engine.py + strategy_engine.py
+  Spring  : REST API + Keycloak adapter + RBAC
+  React   : Dashboard Vite + Tailwind + Lucide Icons
+  Infra   : MySQL + Keycloak + Cron (00h00 UTC+1 Maroc)
+end note
+
+@enduml

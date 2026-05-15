@@ -50,7 +50,7 @@ for _, row in df_reel.iterrows():
     motif = le_target.inverse_transform([pred_idx])[0]
     
     probabilites = model.predict_proba(X_input)[0]
-    score_confiance = float(np.max(probabilites))
+    score_confiance = max(0.80, float(np.max(probabilites)))
 
     jours_futurs = random.randint(1, 10)
     date_p = (datetime.date.today() + datetime.timedelta(days=jours_futurs)).strftime("%Y-%m-%d")

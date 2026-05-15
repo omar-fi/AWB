@@ -7,7 +7,6 @@ from sklearn.model_selection import train_test_split
 def entrainer_ia_awb():
     # 1. Connexion et Récupération
     conn = mysql.connector.connect(host="localhost", user="root", password="", database="attijari_predict_db")
-    
     # Requête pour créer le dataset (Jointure entre compte, client et historique)
     query = """
         SELECT 

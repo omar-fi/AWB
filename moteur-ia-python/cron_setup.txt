@@ -1,0 +1,13 @@
+# Configuration du Batch Nocturne (Attijariwafa Bank)
+
+Pour exécuter les prédictions chaque nuit à minuit, ajoutez la ligne suivante à votre crontab :
+
+1. Ouvrez le crontab :
+   crontab -e
+
+2. Ajoutez la ligne suivante (adaptez le chemin absolu vers votre projet et votre environnement virtuel) :
+   0 0 * * * cd /Users/omarfilali/Desktop/AWB/moteur-ia-python && /Users/omarfilali/Desktop/AWB/venv/bin/python3 main.py >> nightly_batch.log 2>&1
+
+Note : 
+- '0 0 * * *' signifie "Tous les jours à 00:00".
+- Assurez-vous que le chemin vers python3 pointe bien vers l'environnement virtuel où les dépendances ont été installées.

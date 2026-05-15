@@ -1,0 +1,396 @@
+@startuml Diagramme_Classe_AWB
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam roundcorner 8
+skinparam classAttributeIconSize 0
+
+skinparam class {
+    BackgroundColor #FFFFFF
+    BorderColor #E8391D
+    FontColor #1A1A1A
+    HeaderBackgroundColor #1A1A1A
+    HeaderFontColor #FFFFFF
+    ArrowColor #E8391D
+    AttributeFontColor #333333
+    StereotypeFontColor #E8391D
+}
+
+skinparam package {
+    BackgroundColor #FFF7E6
+    BorderColor #FFC000
+    FontColor #1A1A1A
+}
+
+skinparam note {
+    BackgroundColor #FFFBE6
+    BorderColor #FFC000
+    FontColor #333333
+}
+
+title AWB IA Predictive -- Diagramme de Classes
+
+' ================================================================
+'  PACKAGE : COUCHE DOMAINE (Entites JPA / Spring Boot)
+' ================================================================
+
+package "Domaine Metier (Spring Boot)" {
+
+    class Agence {
+        - id : Long
+        - nomAgence : String
+        - ville : String
+        - adresse : String
+        --
+        + getClients() : List<Client>
+    }
+
+    class Banquier {
+        - id : Long
+        - nomComplet : String
+        - email : String
+        - motDePasse : String
+        - role : RoleBanquier
+        - objectifMensuel : Double
+        --
+        + getAgence() : Agence
+    }
+
+    enum RoleBanquier {
+        CONSEILLER
+        PORTEFEUILLEUR
+        DIRECTEUR
+    }
+
+    class Client {
+        - id : Long
+        - cin : String
+        - nomComplet : String
+        - email : String
+        - telephone : String
+        - segmentMetier : String
+        - dateCreation : LocalDateTime
+        - scoreChurn : Double
+        - niveauRisque : String
+        --
+        + getComptes() : List<Compte>
+        + getPrediction() : PredictionVisite
+        + getAgence() : Agence
+    }
+
+    enum SegmentMetier {
+        PARTICULIER
+        VIP
+        PROFESSIONNEL
+        PME
+        TPE
+        ETUDIANT
+    }
+
+    class Compte {
+        - id : Long
+        - numeroCompte : String
+        - typeCompte : String
+        - solde : BigDecimal
+        - dateOuverture : LocalDateTime
+        --
+        + getClient() : Client
+    }
+
+    enum TypeCompte {
+        COURANT
+        EPARGNE
+        AUCUN
+    }
+
+    class HistoriqueOperation {
+        - id : Long
+        - dateHeureOperation : LocalDateTime
+        - typeOperation : String
+        - montant : BigDecimal
+        --
+        + getClient() : Client
+        + getCompte() : Compte
+    }
+
+    class PredictionVisite {
+        - id : Long
+        - datePrevue : LocalDate
+        - datePrevueAjustee : LocalDate
+        - motifAjustement : String
+        - plageHorairePrevue : String
+        - operationPrevue : String
+        - scoreProbabiliteGlobal : Double
+        - insightGenai : String
+        - strategiePrescrite : String
+        - dateDernierCalcul : LocalDateTime
+        - scoreChurn : Double
+        - niveauRisque : String
+        - fiabilite : Double
+        --
+        + getClient() : Client
+    }
+
+    class ActionConseiller {
+        - id : Long
+        - dateAction : LocalDateTime
+        - categorieAction : String
+        - statut : String
+        - commentaire : String
+        - priorite : String
+        - typeDelegation : String
+        --
+        + getBanquier() : Banquier
+        + getClient() : Client
+    }
+
+    enum NiveauRisque {
+        FAIBLE
+        SOUS_SURVEILLANCE
+        ALERTE
+        ELEVE
+        CRITIQUE
+    }
+
+    enum TypeDelegation {
+        ANALYSE_RISQUE
+        ACTION_DELEGUE
+        APPEL
+        RDV
+        RECOUVREMENT
+    }
+}
+
+' ================================================================
+'  PACKAGE : MOTEUR IA PYTHON
+' ================================================================
+
+package "Moteur IA Python" {
+
+    class PredictionScheduler {
+        - stopEvent : Event
+        - batchLock : Lock
+        + dernierBatchOk : bool
+        + nbBatchesTotal : int
+        + heureDernierRun : str
+        --
+        + demarrer(executer_maintenant: bool)
+        + arreter()
+        + executerMaintenant()
+        + statut() : dict
+        - boucleprincipale()
+        - executerBatchComplet(declencheur: str)
+        - secondesAvantProchainMinuit() : float
+    }
+
+    class ConsumerIA {
+        - modelVisite : XGBClassifier
+        - modelOperation : XGBClassifier
+        - modelNextDate : XGBRegressor
+        - modelNextTime : XGBRegressor
+        - modelNextOperation : XGBClassifier
+        --
+        + recalculerPrediction(client_id, action, type_op, montant)
+        - getProfil(client_id) : dict
+        - predireVisite(profil, type_op, montant) : tuple
+        - predireDateVisite(probabilite) : tuple
+        - calculerScoreChurn(profil) : float
+        - genererInsightLLM(...) : str
+        - sauvegarderPrediction(...)
+    }
+
+    class MCPIAServer {
+        - mcp : FastMCP
+        - modelVisite : XGBClassifier
+        --
+        + getClientHistory(client_id: int) : dict
+        + predictVisite(profil_json: str) : dict
+        + calculateRiskAndStrategy(profil_json: str) : dict
+        + generateInsight(profil_json, prediction_json, risque_json) : str
+    }
+
+    class AgentIA {
+        - session : ClientSession
+        --
+        + runAgent()
+        - sauvegarderPrediction(client_id, prediction, risque, insight)
+    }
+
+    class AnalysisEngine {
+        --
+        + determinerStrategie(segment, score_churn, solde, a_epargne) : str
+        + calculerNiveauRisque(score_churn) : str
+        + genererInsightIA(historique_recent) : str
+    }
+
+    class StrategyEngine {
+        --
+        + determinerActionPrescrite(client_data) : str
+        + genererInsightLLM(client_data, action_prescrite) : str
+        + analyserProfilClient(client_data) : dict
+    }
+}
+
+' ================================================================
+'  PACKAGE : API REST (Spring Boot Controllers)
+' ================================================================
+
+package "API REST (Spring Boot)" {
+
+    class ClientController {
+        --
+        + getClients(agenceId, page, size) : Page<Client>
+        + getClientById(id) : Client
+        + createClient(client) : Client
+        + updateClient(id, client) : Client
+        + deleteClient(id) : void
+    }
+
+    class PredictionVisiteController {
+        --
+        + getPredictionsByAgence(agenceId) : List<PredictionVisite>
+        + getPredictionByClient(clientId) : PredictionVisite
+        + forceRecalcul(clientId) : void
+    }
+
+    class ActionController {
+        --
+        + createAction(request) : ActionConseiller
+        + getDernierExamen(clientId) : ActionConseiller
+        + getActionsByBanquier(banquierId) : List<ActionConseiller>
+    }
+
+    class StatsController {
+        --
+        + getStatsRisques(agenceId) : Map<String, Object>
+        + getAdminKpi(agenceId) : Map<String, Object>
+    }
+
+    class AuthController {
+        --
+        + login(credentials) : TokenResponse
+        + refreshToken(refreshToken) : TokenResponse
+    }
+}
+
+' ================================================================
+'  PACKAGE : FRONTEND REACT
+' ================================================================
+
+package "Frontend React (Composants)" {
+
+    class DashboardConseiller {
+        - allPredictions : List
+        - activeTab : String
+        - searchTerm : String
+        - user : AuthContext
+        --
+        + fetchAllData()
+        + fetchClients()
+        + filterFn(prediction) : bool
+    }
+
+    class AuthContext {
+        - user : Object
+        - token : String
+        --
+        + hasPermission(perm: string) : bool
+        + login()
+        + logout()
+    }
+
+    class PredictionCard {
+        - prediction : Object
+        --
+        + render() : JSX
+    }
+
+    class ConseillerPredictionCard {
+        - prediction : Object
+        --
+        + render() : JSX
+    }
+}
+
+' ================================================================
+'  RELATIONS DOMAINE
+' ================================================================
+
+Agence "1" o-- "0..*" Client : contient
+Agence "1" o-- "0..*" Banquier : emploie
+
+Banquier "1" *-- "0..*" ActionConseiller : enregistre
+Banquier --> RoleBanquier : a le role
+
+Client "1" *-- "0..*" Compte : possede
+Client "1" *-- "1" PredictionVisite : est associe a
+Client "1" *-- "0..*" HistoriqueOperation : a comme historique
+Client "1" *-- "0..*" ActionConseiller : concerne
+Client --> SegmentMetier : appartient au segment
+Client --> NiveauRisque : a le niveau risque
+
+Compte --> TypeCompte : est de type
+
+HistoriqueOperation --> Client : concerne
+HistoriqueOperation --> Compte : debite / credite
+
+ActionConseiller --> TypeDelegation : est de type
+ActionConseiller --> NiveauRisque : a la priorite
+
+PredictionVisite --> NiveauRisque : indique le niveau
+
+' ================================================================
+'  RELATIONS MOTEUR IA
+' ================================================================
+
+PredictionScheduler ..> ConsumerIA : <<use>>\nappel batch
+AgentIA ..> MCPIAServer : <<use>>\nprotocole MCP
+MCPIAServer ..> AnalysisEngine : <<use>>
+ConsumerIA ..> AnalysisEngine : <<use>>
+ConsumerIA ..> StrategyEngine : <<use>>
+
+' ================================================================
+'  RELATIONS REST API
+' ================================================================
+
+ClientController ..> Client : <<CRUD>>
+PredictionVisiteController ..> PredictionVisite : <<lecture>>
+PredictionVisiteController ..> ConsumerIA : <<use>>\nrecalcul
+ActionController ..> ActionConseiller : <<CRUD>>
+StatsController ..> Client : <<agrege>>
+StatsController ..> PredictionVisite : <<agrege>>
+
+' ================================================================
+'  RELATIONS FRONTEND
+' ================================================================
+
+DashboardConseiller --> AuthContext : utilise
+DashboardConseiller --> PredictionCard : affiche si\nPortefeuilleur / Dir
+DashboardConseiller --> ConseillerPredictionCard : affiche si\nConseiller
+DashboardConseiller ..> PredictionVisiteController : <<API REST>>
+DashboardConseiller ..> ActionController : <<API REST>>
+
+note right of PredictionVisite
+  Table centrale du systeme.
+  Mise a jour chaque nuit a 00h00
+  par le batch (ConsumerIA ou AgentIA).
+  Lue en temps reel par le Dashboard.
+end note
+
+note right of AuthContext
+  Gestion RBAC delegue :
+  Le Directeur peut deleguer
+  des permissions a ses Conseillers
+  via Keycloak (roles realm_access).
+end note
+
+note bottom of ConsumerIA
+  Modeles XGBoost charges au demarrage :
+  - xgboost_optimise.pkl    (visite : classification)
+  - xgboost_next_date.pkl   (delta jours : regression)
+  - xgboost_next_time.pkl   (heure : regression)
+  - xgboost_next_operation.pkl (operation : classification)
+  + encoders : segment, type_compte, next_operation
+end note
+
+@enduml

@@ -19,7 +19,7 @@ export default function OperationModal({ isOpen, onClose, compte, onOperationSuc
 
     setChargement(true);
     try {
-      // Appel Spring Boot → déclenche l'événement Kafka → XGBoost → MySQL
+      // Appel Spring Boot → XGBoost → MySQL
       await axios.post(`http://localhost:8080/api/v1/comptes/${compte.id}/operations`, {
         typeOperation: typeOperation,
         montant: parseFloat(montant)
@@ -72,7 +72,6 @@ export default function OperationModal({ isOpen, onClose, compte, onOperationSuc
             </div>
             <div>
               <h3 className="text-lg font-bold text-gray-800">Transaction validée !</h3>
-              <p className="text-sm text-gray-500 mt-1">L'événement a été transmis via Kafka.</p>
             </div>
             <div className="w-full bg-purple-50 border border-purple-200 rounded-xl p-4 flex items-center gap-3">
               <div className="animate-spin text-purple-500">
@@ -116,6 +115,13 @@ export default function OperationModal({ isOpen, onClose, compte, onOperationSuc
                     <option value="VIREMENT_RECU">Virement Reçu</option>
                     <option value="REMISE_CHEQUE">Remise de Chèque</option>
                   </optgroup>
+                  {/* Opérations spécifiques au compte ÉPARGNE */}
+                  {compte.typeCompte === 'EPARGNE' && (
+                    <optgroup label="💰 Opérations Épargne">
+                      <option value="PLACEMENT">Placement Épargne (+)</option>
+                      <option value="RETRAIT_EPARGNE">Retrait Épargne (-)</option>
+                    </optgroup>
+                  )}
                 </select>
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">▼</div>
               </div>

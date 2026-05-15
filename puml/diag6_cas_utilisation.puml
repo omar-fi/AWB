@@ -1,0 +1,156 @@
+@startuml Diagramme_CasUtilisation_AWB
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam roundcorner 10
+skinparam actorStyle awesome
+
+skinparam usecase {
+    BackgroundColor #FFFFFF
+    BorderColor #E8391D
+    FontColor #1A1A1A
+    ArrowColor #E8391D
+}
+
+skinparam actor {
+    BackgroundColor #1A1A1A
+    FontColor #FFFFFF
+    BorderColor #E8391D
+}
+
+skinparam package {
+    BackgroundColor #FFF7E6
+    BorderColor #FFC000
+    FontColor #1A1A1A
+}
+
+title AWB IA Predictive -- Diagramme des Cas d'Utilisation
+
+' -------------------------------------------------------
+' ACTEURS
+' -------------------------------------------------------
+
+actor "Conseiller\nClientele" as CONS
+actor "Portefeuilleur\n(Analyste Risques)" as PORT
+actor "Directeur\nd'Agence" as DIR
+actor "Agent IA\n(Systeme Python)" as AGENDIA
+actor "Scheduler\n(Cron Daemon)" as CRON
+actor "Keycloak\n(Systeme Auth)" as KC
+
+' Hierarchie acteurs humains
+PORT -|> CONS
+DIR -|> PORT
+
+' -------------------------------------------------------
+' PACKAGE : AUTHENTIFICATION
+' -------------------------------------------------------
+
+rectangle "Authentification & Securite" as PKG_AUTH {
+    usecase "Se connecter\n(OAuth2 / OIDC)" as UC_LOGIN
+    usecase "Obtenir token JWT\n+ roles + permissions" as UC_TOKEN
+    usecase "Deleguer des permissions\na un Conseiller" as UC_DELEGATE
+}
+
+' -------------------------------------------------------
+' PACKAGE : GESTION DES PREDICTIONS
+' -------------------------------------------------------
+
+rectangle "Consultation & Predictions IA" as PKG_PRED {
+    usecase "Consulter clients\nattendus aujourd'hui" as UC_TODAY
+    usecase "Consulter planning\ndes predictions IA" as UC_PLANNING
+    usecase "Consulter l'agenda IA\npar date" as UC_AGENDA
+    usecase "Voir diagnostic IA\n(insight GenAI + strategie)" as UC_INSIGHT
+    usecase "Enregistrer resultat\nde visite client" as UC_ACTION
+}
+
+' -------------------------------------------------------
+' PACKAGE : GESTION PORTEFEUILLE CLIENTS
+' -------------------------------------------------------
+
+rectangle "Gestion du Portefeuille Clients" as PKG_CLIENT {
+    usecase "Consulter la liste\ndes clients (agence)" as UC_LIST
+    usecase "Voir details\nd'un client" as UC_DETAIL
+    usecase "Creer un nouveau\nclient" as UC_CREATE
+    usecase "Modifier le profil\nd'un client" as UC_EDIT
+    usecase "Supprimer un client" as UC_DELETE
+}
+
+' -------------------------------------------------------
+' PACKAGE : ANALYSE & SUPERVISION
+' -------------------------------------------------------
+
+rectangle "Analyse & Supervision (Portefeuilleur / Directeur)" as PKG_SUPER {
+    usecase "Consulter stats\nrisques portefeuille" as UC_STATS
+    usecase "Consulter KPI\nde l'agence" as UC_KPI
+    usecase "Enregistrer une instruction\npour le Conseiller" as UC_INSTR
+    usecase "Classifier clients\npar niveau de risque" as UC_RISK
+}
+
+' -------------------------------------------------------
+' PACKAGE : MOTEUR IA (Systeme)
+' -------------------------------------------------------
+
+rectangle "Moteur IA Python (Systeme Automatique)" as PKG_IA {
+    usecase "Declencher batch\nnocturne (00h00 Maroc)" as UC_CRON
+    usecase "Predire probabilite\nde visite (XGBoost)" as UC_PREDICT
+    usecase "Predire date / heure /\noperation future" as UC_NEXTEV
+    usecase "Calculer score churn\net niveau de risque" as UC_CHURN
+    usecase "Generer insight IA\n(Groq LLM)" as UC_LLM
+    usecase "Sauvegarder prediction\nen base MySQL" as UC_SAVE
+}
+
+' -------------------------------------------------------
+' RELATIONS - Acteurs humains
+' -------------------------------------------------------
+
+CONS --> UC_LOGIN
+CONS --> UC_TODAY
+CONS --> UC_PLANNING
+CONS --> UC_AGENDA
+CONS --> UC_ACTION
+CONS --> UC_LIST
+
+DIR --> UC_DELEGATE
+DIR --> UC_STATS
+DIR --> UC_KPI
+DIR --> UC_CREATE
+DIR --> UC_EDIT
+DIR --> UC_DELETE
+
+PORT --> UC_INSIGHT
+PORT --> UC_INSTR
+PORT --> UC_RISK
+PORT --> UC_DETAIL
+
+' -------------------------------------------------------
+' RELATIONS - Systeme Auth
+' -------------------------------------------------------
+
+KC --> UC_TOKEN
+UC_LOGIN ..> UC_TOKEN : <<include>>
+
+' -------------------------------------------------------
+' RELATIONS - Agent IA
+' -------------------------------------------------------
+
+CRON --> UC_CRON
+UC_CRON ..> UC_PREDICT : <<include>>
+UC_PREDICT ..> UC_NEXTEV : <<include>>
+UC_PREDICT ..> UC_CHURN : <<include>>
+UC_CHURN ..> UC_LLM : <<include>>
+UC_LLM ..> UC_SAVE : <<include>>
+
+AGENDIA --> UC_PREDICT
+AGENDIA --> UC_LLM
+
+' -------------------------------------------------------
+' RELATIONS - Extensions RBAC
+' -------------------------------------------------------
+
+UC_TODAY ..> UC_INSIGHT : <<extend>>\n[si CAN_ANALYZE_CLIENTS]
+UC_LIST ..> UC_CREATE : <<extend>>\n[si CAN_CREATE_ACCOUNT]
+UC_LIST ..> UC_EDIT : <<extend>>\n[si CAN_EDIT_CLIENT]
+UC_LIST ..> UC_DELETE : <<extend>>\n[si CAN_DELETE_ACCOUNT]
+UC_LIST ..> UC_DETAIL : <<extend>>\n[si CAN_VIEW_PORTFOLIO]
+
+@enduml

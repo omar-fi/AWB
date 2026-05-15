@@ -1,0 +1,115 @@
+@startuml Diagramme2_AgentMCP
+
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 8
+skinparam ParticipantPadding 15
+skinparam defaultFontName Arial
+
+skinparam participant {
+    BackgroundColor #2C2C2C
+    FontColor #FFFFFF
+    BorderColor #E8391D
+}
+skinparam sequence {
+    ArrowColor #E8391D
+    LifeLineBorderColor #AAAAAA
+    LifeLineBackgroundColor #F0F0F0
+    GroupBackgroundColor #FFF7E6
+    GroupBorderColor #FFC000
+    NoteBackgroundColor #FFFBE6
+    NoteBorderColor #FFC000
+}
+
+title AWB -- [2] Agent IA via Protocole MCP (agent_ia.py <-> mcp_ia_server.py)
+
+participant "Agent IA\n(agent_ia.py)" as AGENT
+participant "MCP Server\n(mcp_ia_server.py)" as MCP
+participant "XGBoost Models\n(.pkl)" as XGB
+participant "Groq LLM\n(llama-3.1-8b)" as LLM
+participant "MySQL\nattijari_predict_db" as DB
+
+== Initialisation ==
+
+AGENT -> AGENT : asyncio.run(run_agent())
+AGENT -> MCP : StdioServerParameters\n(subprocess: python mcp_ia_server.py)
+activate MCP
+MCP --> AGENT : Session MCP initialisee [OK]
+note right of MCP
+  FastMCP expose 4 tools :
+  - get_client_history
+  - predict_visite
+  - calculate_risk_and_strategy
+  - generate_insight
+end note
+
+AGENT -> DB : SELECT id FROM client
+activate DB
+DB --> AGENT : [liste clients]
+deactivate DB
+
+== Traitement par client ==
+
+loop Pour chaque client_id
+
+    group TOOL 1 : get_client_history
+        AGENT -> MCP : call_tool("get_client_history", {client_id: X})
+        activate MCP
+        MCP -> DB : SELECT segment, solde, has_epargne,\nAVG(montant), COUNT(ops), last_op
+        activate DB
+        DB --> MCP : donnees agregees
+        deactivate DB
+        MCP --> AGENT : profil_json (dict complet)
+        deactivate MCP
+    end
+
+    group TOOL 2 : predict_visite
+        AGENT -> MCP : call_tool("predict_visite", {profil_json})
+        activate MCP
+        MCP -> XGB : predict_proba(xgboost_optimise.pkl)
+        activate XGB
+        XGB --> MCP : score_probabilite [0-99%]
+        deactivate XGB
+        MCP -> XGB : predict(next_date, next_time, next_operation)
+        activate XGB
+        XGB --> MCP : delta_jours, heure, op_encodee
+        deactivate XGB
+        MCP -> MCP : _next_jour_ouvre()\n+ contraintes horaires AWB Maroc
+        MCP --> AGENT : {score, operation_prevue, date_prevue,\nplage_horaire, statut}
+        deactivate MCP
+    end
+
+    group TOOL 3 : calculate_risk_and_strategy
+        AGENT -> MCP : call_tool("calculate_risk_and_strategy", {profil_json})
+        activate MCP
+        MCP -> MCP : Calcul score_churn multi-criteres\n(solde, retraits, inactivite)
+        MCP -> MCP : Niveau : FAIBLE / ALERTE / CRITIQUE\nStrategie : regles metier deterministes
+        MCP --> AGENT : {score_churn, niveau_risque,\nstrategie_prescrite}
+        deactivate MCP
+    end
+
+    group TOOL 4 : generate_insight
+        AGENT -> MCP : call_tool("generate_insight",\n{profil_json, prediction_json, risque_json})
+        activate MCP
+        MCP -> LLM : Prompt Groq (contexte complet client)
+        activate LLM
+        LLM --> MCP : "Sante : [attrition/fidelite] |\nStrategie : [action retention]"
+        deactivate LLM
+        MCP --> AGENT : insight_text
+        deactivate MCP
+    end
+
+    AGENT -> AGENT : Extraire strategie_llm\n(split "Strategie :")
+
+    AGENT -> DB : UPSERT prediction_visite\n(score, op, date, insight,\nstrategie, risque, NOW())
+    activate DB
+    DB --> AGENT : OK
+    deactivate DB
+
+end
+
+AGENT -> MCP : Fermer session MCP
+deactivate MCP
+AGENT -> AGENT : Agent IA -- Mission terminee
+
+@enduml

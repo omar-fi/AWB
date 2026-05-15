@@ -1,6 +1,5 @@
 package com.digitalbank.predictbackend.dto;
 
-
 import lombok.Data;
 import java.math.BigDecimal;
 
@@ -8,8 +7,10 @@ import java.math.BigDecimal;
 public class OperationRequest {
     private String typeOperation;
     private BigDecimal montant;
+
     // Constructeur par défaut obligatoire pour Spring (Jackson)
-    public OperationRequest() {}
+    public OperationRequest() {
+    }
 
     public String getTypeOperation() {
         return typeOperation;

@@ -8,7 +8,9 @@ import com.digitalbank.predictbackend.service.EmailService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/predictions")
@@ -18,13 +20,16 @@ public class PredictionVisiteController {
     private final PredictionVisiteRepository predictionRepository;
     private final ClientRepository clientRepository;
     private final EmailService emailService;
+    private final com.digitalbank.predictbackend.service.BatchIaService batchIaService;
 
     public PredictionVisiteController(PredictionVisiteRepository predictionRepository,
                                       ClientRepository clientRepository,
-                                      EmailService emailService) {
+                                      EmailService emailService,
+                                      com.digitalbank.predictbackend.service.BatchIaService batchIaService) {
         this.predictionRepository = predictionRepository;
         this.clientRepository     = clientRepository;
         this.emailService         = emailService;
+        this.batchIaService      = batchIaService;
     }
 
     @GetMapping("/client/{clientId}")
@@ -52,5 +57,49 @@ public class PredictionVisiteController {
             });
         }
         return saved;
+    }
+
+    // ROUTE COMMERCIAL : Récupérer les clients à contacter aujourd'hui
+    @GetMapping("/agence/{agenceId}/aujourdhui")
+    public ResponseEntity<List<PredictionVisite>> getPredictionsDuJour(@PathVariable Long agenceId) {
+        LocalDate aujourdhui = LocalDate.now();
+        List<PredictionVisite> opportunites = predictionRepository.findPredictionsDuJourByAgence(agenceId, aujourdhui);
+
+        if (opportunites.isEmpty()) {
+            return ResponseEntity.noContent().build();
+        }
+        return ResponseEntity.ok(opportunites);
+    }
+
+    // ALIAS PHASE 2 : Consulter "Clients attendus aujourd'hui"
+    @GetMapping("/opportunites")
+    public ResponseEntity<List<PredictionVisite>> getOpportunitesDirect(@RequestParam Long agenceId) {
+        LocalDate aujourdhui = LocalDate.now();
+        List<PredictionVisite> opportunites = predictionRepository.findHighProbabilityPredictionsDuJourByAgence(agenceId, aujourdhui);
+        
+        if (opportunites.isEmpty()) {
+            return ResponseEntity.noContent().build();
+        }
+        return ResponseEntity.ok(opportunites);
+    }
+
+    // COMMERCIAL : Toutes les prédictions de l'agence (planning complet)
+    @GetMapping("/agence/{agenceId}")
+    public ResponseEntity<List<PredictionVisite>> getAllPredictionsByAgence(@PathVariable Long agenceId) {
+        List<PredictionVisite> predictions = predictionRepository.findAllByAgenceId(agenceId);
+        if (predictions.isEmpty()) {
+            return ResponseEntity.noContent().build();
+        }
+        return ResponseEntity.ok(predictions);
+    }
+
+    @PostMapping("/batch-refresh")
+    public ResponseEntity<String> runBatchIa() {
+        String result = batchIaService.runBatchProcess();
+        if (result.startsWith("SUCCÈS")) {
+            return ResponseEntity.ok(result);
+        } else {
+            return ResponseEntity.status(500).body(result);
+        }
     }
 }

@@ -1,44 +1,43 @@
 package com.digitalbank.predictbackend.service;
 
-
 import com.digitalbank.predictbackend.entities.Client;
 import com.digitalbank.predictbackend.repository.ClientRepository;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import jakarta.transaction.Transactional;
 import java.time.LocalDate;
 import java.util.List;
 
+/**
+ * Service de surveillance des prédictions expirées.
+ * Pas de recalcul en temps réel : le batch nocturne Python (nightly_batch.py)
+ * se charge de régénérer toutes les prédictions chaque nuit.
+ * Ce service se contente de logger les prédictions dont la date est passée.
+ */
 @Service
 public class PredictionSchedulerService {
 
     private final ClientRepository clientRepository;
-    private final KafkaTemplate<String, String> kafkaTemplate;
 
-    public PredictionSchedulerService(ClientRepository clientRepository, KafkaTemplate<String, String> kafkaTemplate) {
+    public PredictionSchedulerService(ClientRepository clientRepository) {
         this.clientRepository = clientRepository;
-        this.kafkaTemplate = kafkaTemplate;
     }
 
-    @Scheduled(fixedRate = 60000)
+    /**
+     * Vérifie toutes les heures les prédictions expirées et les signale.
+     * Le vrai recalcul est délégué au batch nocturne Python.
+     */
+    @Scheduled(fixedRate = 3600000) // toutes les heures
     @Transactional
-    public void verifierEtRecalculerPredictionsExpirees() {
-
+    public void signalerPredictionsExpirees() {
         LocalDate aujourdHui = LocalDate.now();
+        List<Client> clientsExpires = clientRepository.findClientsWithExpiredPredictions(aujourdHui);
 
-        List<Client> clientsAmettreAJour = clientRepository.findClientsWithExpiredPredictions(aujourdHui);
-
-        if (!clientsAmettreAJour.isEmpty()) {
-            System.out.println("⏳ Recalcul IA déclenché pour " + clientsAmettreAJour.size() + " prédictions expirées.");
-
-            for (Client client : clientsAmettreAJour) {
-                client.setPrediction(null);
-                clientRepository.save(client);
-
-                String message = "{\"clientId\": " + client.getId() + ", \"action\": \"RECALCUL_EXPIRATION\"}";
-                kafkaTemplate.send("topic_prediction_ia", message);
-            }
+        if (!clientsExpires.isEmpty()) {
+            System.out.println("⚠️ [Batch Monitor] " + clientsExpires.size()
+                    + " prédictions expirées détectées. Elles seront recalculées par le prochain batch nocturne (nightly_batch.py).");
+        } else {
+            System.out.println("✅ [Batch Monitor] Toutes les prédictions sont à jour.");
         }
     }
 }

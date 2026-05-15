@@ -1,6 +1,7 @@
 package com.digitalbank.predictbackend.entities;
 
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
@@ -27,6 +28,6 @@ public class Compte {
     private LocalDateTime dateOuverture;
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "client_id")
-    @JsonIgnoreProperties("comptes")
+    @JsonIgnore
     private Client client;
 }

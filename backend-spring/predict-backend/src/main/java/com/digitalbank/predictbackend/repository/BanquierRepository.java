@@ -6,4 +6,5 @@ import java.util.Optional;
 
 public interface BanquierRepository extends JpaRepository<Banquier, Long> {
     Optional<Banquier> findByEmail(String email);
+    java.util.List<Banquier> findByAgenceId(Long agenceId);
 }

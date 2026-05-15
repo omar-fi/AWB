@@ -14,4 +14,5 @@ public class PredictionIaEvent {
     private String operationPrevue; // ex: "Retrait Espèces"
     private String datePrevue;      // ex: "2026-03-27"
     private String plageHorairePrevue; // ex: "09h00 - 10h00"
+    private String niveauRisque;       // ex: "ÉLEVÉ"
 }

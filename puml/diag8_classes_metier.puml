@@ -1,0 +1,133 @@
+@startuml Diagramme_Classe_Metier_AWB
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam roundcorner 8
+skinparam classAttributeIconSize 0
+
+skinparam class {
+    BackgroundColor #FFFFFF
+    BorderColor #E8391D
+    FontColor #1A1A1A
+    HeaderBackgroundColor #1A1A1A
+    HeaderFontColor #FFFFFF
+    ArrowColor #E8391D
+    AttributeFontColor #333333
+}
+
+skinparam package {
+    BackgroundColor #FFF7E6
+    BorderColor #FFC000
+    FontColor #1A1A1A
+}
+
+title AWB IA Predictive -- Diagramme de Classes (Partie Metier)
+
+package "Domaine Metier (Spring Boot)" {
+
+    class Agence {
+        - id : Long
+        - nomAgence : String
+        - ville : String
+        - adresse : String
+    }
+
+    class Banquier {
+        - id : Long
+        - nomComplet : String
+        - email : String
+        - motDePasse : String
+        - role : RoleBanquier
+        - objectifMensuel : Double
+    }
+
+    enum RoleBanquier {
+        CONSEILLER
+        PORTEFEUILLEUR
+        DIRECTEUR
+    }
+
+    class Client {
+        - id : Long
+        - cin : String
+        - nomComplet : String
+        - email : String
+        - telephone : String
+        - segmentMetier : String
+        - dateCreation : LocalDateTime
+        - scoreChurn : Double
+        - niveauRisque : String
+    }
+
+    class Compte {
+        - id : Long
+        - numeroCompte : String
+        - typeCompte : String
+        - solde : BigDecimal
+        - dateOuverture : LocalDateTime
+    }
+
+    class HistoriqueOperation {
+        - id : Long
+        - dateHeureOperation : LocalDateTime
+        - typeOperation : String
+        - montant : BigDecimal
+    }
+
+    class PredictionVisite {
+        - id : Long
+        - datePrevue : LocalDate
+        - datePrevueAjustee : LocalDate
+        - motifAjustement : String
+        - plageHorairePrevue : String
+        - operationPrevue : String
+        - scoreProbabiliteGlobal : Double
+        - insightGenai : String
+        - strategiePrescrite : String
+        - dateDernierCalcul : LocalDateTime
+        - scoreChurn : Double
+        - niveauRisque : String
+        - fiabilite : Double
+    }
+
+    class ActionConseiller {
+        - id : Long
+        - dateAction : LocalDateTime
+        - categorieAction : String
+        - statut : String
+        - commentaire : String
+        - priorite : String
+        - typeDelegation : String
+    }
+
+    enum NiveauRisque {
+        FAIBLE
+        SOUS_SURVEILLANCE
+        ALERTE
+        ELEVE
+        CRITIQUE
+    }
+}
+
+' Relations
+Agence "1" o-- "0..*" Client : contient
+Agence "1" o-- "0..*" Banquier : emploie
+
+Banquier "1" *-- "0..*" ActionConseiller : enregistre
+Banquier --> RoleBanquier : possede
+
+Client "1" *-- "0..*" Compte : possede
+Client "1" *-- "1" PredictionVisite : est associe a
+Client "1" *-- "0..*" HistoriqueOperation : a comme historique
+Client "1" *-- "0..*" ActionConseiller : concerne
+Client --> NiveauRisque : a le niveau
+
+Compte "1" *-- "0..*" HistoriqueOperation : enregistre
+
+ActionConseiller --> Banquier : effectuee par
+ActionConseiller --> Client : concerne
+
+PredictionVisite --> Client : pour
+PredictionVisite --> NiveauRisque : indique
+
+@enduml

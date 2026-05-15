@@ -1,0 +1,124 @@
+@startuml Diagramme1_BatchNocturne
+
+skinparam backgroundColor #FAFAFA
+skinparam sequenceArrowThickness 2
+skinparam roundcorner 8
+skinparam ParticipantPadding 15
+skinparam defaultFontName Arial
+
+skinparam participant {
+    BackgroundColor #2C2C2C
+    FontColor #FFFFFF
+    BorderColor #E8391D
+}
+skinparam sequence {
+    ArrowColor #E8391D
+    LifeLineBorderColor #AAAAAA
+    LifeLineBackgroundColor #F0F0F0
+    GroupBackgroundColor #FFF7E6
+    GroupBorderColor #FFC000
+    DividerBackgroundColor #EEEEEE
+    DividerBorderColor #AAAAAA
+    NoteBackgroundColor #FFFBE6
+    NoteBorderColor #FFC000
+}
+
+title AWB -- [1] Batch Nocturne (Scheduler -> consumer_ia.py)
+
+participant "Scheduler\n(scheduler.py)" as SCHED
+participant "NightlyBatch\n(nightly_batch.py)" as BATCH
+participant "ConsumerIA\n(consumer_ia.py)" as CONSUMER
+participant "XGBoost Models\n(.pkl)" as XGB
+participant "Groq LLM\n(llama-3.1-8b)" as LLM
+participant "MySQL\nattijari_predict_db" as DB
+
+== Demarrage du daemon ==
+
+SCHED -> SCHED : Calculer secondes avant minuit (UTC+1 Maroc)
+SCHED -> SCHED : sleep(secondes_restantes)
+note right of SCHED
+  Declenche chaque nuit a 00h00
+  heure Maroc (UTC+1 fixe depuis 2019)
+end note
+
+== Batch MINUIT ==
+
+SCHED -> BATCH : batch_main()
+activate BATCH
+
+BATCH -> DB : SELECT id FROM client
+activate DB
+DB --> BATCH : [liste client_ids]
+deactivate DB
+
+loop Pour chaque client_id
+
+    BATCH -> CONSUMER : recalculer_prediction(client_id, "BATCH")
+    activate CONSUMER
+
+    CONSUMER -> DB : SELECT type_op, montant\nFROM historique_operation\nWHERE client_id=?\nORDER BY date DESC LIMIT 1
+    activate DB
+    DB --> CONSUMER : {type_op, montant, event_time}
+    deactivate DB
+
+    CONSUMER -> DB : SELECT segment_metier, solde,\nhas_epargne, COUNT(ops),\nAVG(montant), nb_ops_30j
+    activate DB
+    DB --> CONSUMER : profil_agrege
+    deactivate DB
+
+    CONSUMER -> XGB : predict_proba(xgboost_optimise.pkl)\n[24 features: solde, ops, retraits...]
+    activate XGB
+    XGB --> CONSUMER : raw_proba [0.0 - 1.0]
+    deactivate XGB
+
+    CONSUMER -> CONSUMER : Ajustement metier :\nVIP +5%, PRO +3%, activite +3%\nprobabilite_finale = min(raw*coeff*100, 99)
+
+    alt probabilite >= 85%
+        CONSUMER -> CONSUMER : Regle metier :\ndate = AUJOURD'HUI (si jour ouvrable)\nsinon prochain jour ouvrable
+    else probabilite < 85%
+        CONSUMER -> XGB : predict(xgboost_next_date.pkl)\npredict(xgboost_next_time.pkl)\npredict(xgboost_next_operation.pkl)
+        activate XGB
+        XGB --> CONSUMER : delta_jours, heure_float, op_encodee
+        deactivate XGB
+        CONSUMER -> CONSUMER : _next_jour_ouvre(candidate)\nExclure : dimanche + jours feries Maroc
+    end
+
+    CONSUMER -> DB : SELECT type_operation, COUNT(*) AS freq\nGROUP BY type_operation\nORDER BY freq DESC LIMIT 1
+    activate DB
+    DB --> CONSUMER : operation_dominante (historique reel)
+    deactivate DB
+
+    CONSUMER -> CONSUMER : Calcul score_churn multi-criteres :\n- Solde actuel / solde moyen < 0.4 -> +0.6\n- Retraits > 40% du solde -> +0.4\n- Inactivite soudaine (tot_ops>20, 0 ops 30j) -> +0.5\nscore_churn = min(score, 0.95)
+
+    CONSUMER -> CONSUMER : determiner_strategie(segment, score_churn)\ncalculer_niveau_risque(score_churn)\n-> FAIBLE / ALERTE / ELEVE / CRITIQUE
+
+    CONSUMER -> LLM : Prompt : "Segment: {seg} | Solde: {s} MAD\nOps 30j: {n} | Risque: {niveau}\nPredis Sante + Strategie de retention"
+    activate LLM
+    LLM --> CONSUMER : "Sante : [diagnostic] | Strategie : [action]"
+    deactivate LLM
+
+    CONSUMER -> CONSUMER : Extraire strategie_llm\n(split sur "Strategie :")
+
+    CONSUMER -> DB : UPSERT prediction_visite\n(score, op_prevue, date_prevue,\nplage_horaire, insight_genai,\nstrategie, niveau_risque, NOW())
+    activate DB
+    DB --> CONSUMER : OK
+    deactivate DB
+
+    CONSUMER --> BATCH : Client traite
+    deactivate CONSUMER
+
+end
+
+== Distribution par horizon ==
+
+BATCH -> DB : SELECT date_prevue, score, niveau_risque\nFROM prediction_visite ORDER BY score DESC
+activate DB
+DB --> BATCH : [predictions]
+deactivate DB
+
+BATCH -> BATCH : classifier_horizon(date_prevue)\n-> AUJOURD'HUI / DEMAIN / CETTE_SEMAINE\n   CE_MOIS / MOIS_PROCHAIN / PLUS_TARD
+
+BATCH --> SCHED : Batch termine en Xs [OK]
+deactivate BATCH
+
+@enduml

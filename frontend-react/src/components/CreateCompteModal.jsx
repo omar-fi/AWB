@@ -5,7 +5,7 @@ import { X, CreditCard, Save } from 'lucide-react';
 export default function CreateCompteModal({ isOpen, onClose, onCompteCreated }) {
   const [clients, setClients] = useState([]);
   const [clientId, setClientId] = useState('');
-  const [typeCompte, setTypeCompte] = useState('COURANT'); // Valeur par défaut mise à jour
+  const [typeCompte, setTypeCompte] = useState('COURANT'); 
   const [solde, setSolde] = useState('');
 
   const [chargement, setChargement] = useState(false);
@@ -41,11 +41,11 @@ export default function CreateCompteModal({ isOpen, onClose, onCompteCreated }) 
       .then(() => {
         setChargement(false);
         setSolde('');
-        setTypeCompte('COURANT'); // Reset
+        setTypeCompte('COURANT');
         onCompteCreated(); 
         onClose(); 
       })
-      .catch(err => {
+      .catch(err => { 
         console.error(err);
         setErreur("Erreur lors de la création du compte.");
         setChargement(false);

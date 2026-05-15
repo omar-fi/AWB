@@ -4,7 +4,8 @@ pandas==2.2.1
 scikit-learn==1.4.1.post1
 xgboost==2.0.3
 langchain==0.1.13
+langchain-openai==0.1.1
 faker==24.4.0
 mysql-connector-python==8.3.0
 python-dotenv==1.0.1
-kafka-python==2.0.2
+holidays>=0.40.0

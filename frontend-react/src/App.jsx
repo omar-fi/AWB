@@ -1,195 +1,144 @@
-import { useState, useEffect } from 'react'
-import axios from 'axios'
-import Sidebar from './components/Sidebar'
-import FilterBar from './components/FilterBar'
-import ClientTable from './components/ClientTable'
-import CompteTable from './components/CompteTable'
-import CreateClientModal from './components/CreateClientModal'
-import CreateCompteModal from './components/CreateCompteModal'
-import ClientDetailsModal from './components/ClientDetailsModal'
-import Login from './components/Login' // NOUVEAU : Import du composant de connexion
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import DashboardConseiller from './components/DashboardConseiller';
+import DashboardDirecteur from './components/DashboardDirecteur';
+import Login from './components/Login';
+import './App.css';
 
-function App() {
-  // --- ÉTATS D'AUTHENTIFICATION ---
-  const [banquier, setBanquier] = useState(null)
+/**
+ * ProtectedRoute — Garde de route basée sur le rôle Keycloak.
+ *
+ * Avec Keycloak + onLoad:'login-required', l'utilisateur est TOUJOURS
+ * authentifié quand React se monte. On vérifie uniquement le rôle.
+ *
+ * allowedRole : string | string[]
+ */
+const ProtectedRoute = ({ children, allowedRole }) => {
+  const { user } = useAuth();
 
-  // --- ÉTATS GLOBAUX ---
-  const [vueActive, setVueActive] = useState('CLIENTS')
-  const [clientSelectionne, setClientSelectionne] = useState(null)
-  const [tousLesClients, setTousLesClients] = useState([])
-  const [chargement, setChargement] = useState(true)
-  const [erreur, setErreur] = useState(null)
-
-  const [isModalOpen, setIsModalOpen] = useState(false)
-  const [isCompteModalOpen, setIsCompteModalOpen] = useState(false)
-  const [refreshTrigger, setRefreshTrigger] = useState(0)
-  const [pageActive, setPageActive] = useState(0)
-  const ITEMS_PER_PAGE = 10;
-
-  // --- ÉTATS DE FILTRAGE ---
-  const [recherche, setRecherche] = useState('')
-  const [filtreStatut, setFiltreStatut] = useState('TOUS')
-  const [filtreSegment, setFiltreSegment] = useState('TOUS')
-  const [filtreDate, setFiltreDate] = useState('')
-
-  // 1. Vérifier si le banquier est déjà connecté au lancement de l'app
-  useEffect(() => {
-    const savedBanquier = localStorage.getItem('banquierConnecte');
-    if (savedBanquier) {
-      setBanquier(JSON.parse(savedBanquier));
-    }
-  }, []);
-
-  // 2. Charger les clients (Uniquement ceux de l'agence du banquier connecté)
-  useEffect(() => {
-    // Si pas de banquier connecté, on arrête l'exécution ici
-    if (!banquier) return;
-
-    const fetchClients = () => {
-      // L'URL cible maintenant spécifiquement l'agence du banquier
-      axios.get(`http://localhost:8080/api/v1/clients/agence/${banquier.agenceId}?size=1000&sort=id,desc&t=${Date.now()}`)
-        .then(response => {
-          const data = response.data.content || (Array.isArray(response.data) ? response.data : []);
-          setTousLesClients(data);
-          setChargement(false);
-        })
-        .catch(err => {
-          console.error("Erreur API :", err);
-          setErreur("Erreur de connexion au serveur");
-          setChargement(false);
-        });
-    };
-
-    fetchClients();
-    const intervalId = setInterval(fetchClients, 3000); // Polling toutes les 3s
-
-    return () => clearInterval(intervalId);
-  }, [refreshTrigger, banquier]); // On relance si refreshTrigger OU banquier change
-
-  // --- LOGIQUE DE DÉCONNEXION ---
-  const handleLogout = () => {
-    localStorage.removeItem('banquierConnecte');
-    setBanquier(null);
-    setTousLesClients([]); // On vide la liste par sécurité
-  };
-
-  // --- LOGIQUE DE FILTRAGE ET TRI ---
-  const clientsFiltres = (Array.isArray(tousLesClients) ? tousLesClients : [])
-    .filter(client => {
-      const terme = recherche.toLowerCase();
-      const cinClient = client.cin?.toLowerCase() || '';
-      const nomClient = client.nomComplet?.toLowerCase() || '';
-
-      const correspondRecherche = 
-        cinClient.includes(terme) || 
-        nomClient.includes(terme) ||
-        (client.comptes?.some(compte => 
-          compte.numeroCompte?.toLowerCase().includes(terme)
-        ));
-      
-      let correspondStatut = true;
-      if (filtreStatut === 'PREDITS') correspondStatut = !!client.prediction;
-      else if (filtreStatut === 'EN_ATTENTE') correspondStatut = !client.prediction;
-
-      let correspondSegment = true;
-      if (filtreSegment !== 'TOUS') correspondSegment = client.segmentMetier === filtreSegment;
-
-      let correspondDate = true;
-      if (filtreDate !== '') {
-        correspondDate = client.prediction?.datePrevue === filtreDate;
-      }
-
-      return correspondRecherche && correspondStatut && correspondSegment && correspondDate;
-    })
-    .sort((a, b) => {
-      const dateA = a.prediction?.dateDernierCalcul ? new Date(a.prediction.dateDernierCalcul) : new Date(0);
-      const dateB = b.prediction?.dateDernierCalcul ? new Date(b.prediction.dateDernierCalcul) : new Date(0);
-      return dateB - dateA;
-    });
-
-  const totalElements = clientsFiltres.length;
-  const totalPagesCalculated = Math.ceil(totalElements / ITEMS_PER_PAGE);
-  const currentPageActive = (pageActive >= totalPagesCalculated && totalPagesCalculated > 0) ? 0 : pageActive;
-
-  const clientsAffiches = clientsFiltres.slice(
-    currentPageActive * ITEMS_PER_PAGE,
-    (currentPageActive + 1) * ITEMS_PER_PAGE
-  );
-
-  // --- RENDU CONDITIONNEL (CRUCIAL) ---
-  // Si le banquier n'est pas connecté, on affiche UNIQUEMENT la page de Login
-  if (!banquier) {
-    return <Login onLoginSuccess={(data) => setBanquier(data)} />;
+  // Redirection vers le login si l'utilisateur n'est pas connecté
+  if (!user) {
+    return <Navigate to="/login" replace />;
   }
 
-  // Si connecté, on affiche l'application normale
-  return (
-    <div className="flex h-screen bg-[#FFF8F5]">
-      <Sidebar
-        onOpenCreateCompte={() => setIsCompteModalOpen(true)}
-        vueActive={vueActive}
-        setVueActive={setVueActive}
-      />
+  // Sécurité défensive : s'il s'est connecté mais n'a pas de rôle valide
+  if (!user.role) {
+    return <RoleErrorScreen message="Aucun rôle métier trouvé dans votre compte Keycloak." />;
+  }
 
-      <main className="flex-1 p-8 overflow-y-auto">
-        {vueActive === 'CLIENTS' ? (
-          <>
-            <header className="mb-8 flex flex-col gap-4">
-              {/* En-tête mis à jour avec les infos du banquier */}
-              <div className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-                <div>
-                  <h1 className="text-2xl font-bold text-gray-800">
-                    Tableau de Bord - <span className="text-[#E74C3C]">{banquier.agenceNom}</span>
-                  </h1>
-                  <p className="text-gray-500 mt-1">
-                    Bonjour <strong className="text-gray-700">{banquier.nomComplet}</strong> | Prédictions en temps réel
-                  </p>
-                </div>
-                
-                <div className="flex items-center gap-6">
-                  <button 
-                    onClick={handleLogout} 
-                    className="text-sm font-medium text-gray-500 hover:text-red-600 transition-colors"
-                  >
-                    Déconnexion
-                  </button>
-                  <button
-                    onClick={() => setIsModalOpen(true)}
-                    className="bg-[#E74C3C] hover:bg-[#C0392B] text-white px-4 py-2 rounded-lg font-medium flex items-center gap-2 shadow-sm transition-all"
-                  >
-                    Nouveau Client
-                  </button>
-                </div>
-              </div>
+  // Vérification du rôle autorisé
+  const allowed = Array.isArray(allowedRole)
+    ? allowedRole.includes(user.role)
+    : user.role === allowedRole;
 
-              <FilterBar
-                filtreStatut={filtreStatut} setFiltreStatut={(v) => { setFiltreStatut(v); setPageActive(0); }}
-                filtreSegment={filtreSegment} setFiltreSegment={(v) => { setFiltreSegment(v); setPageActive(0); }}
-                filtreDate={filtreDate} setFiltreDate={(v) => { setFiltreDate(v); setPageActive(0); }}
-                recherche={recherche} setRecherche={(v) => { setRecherche(v); setPageActive(0); }}
-              />
-            </header>
+  if (!allowed) {
+    // Redirige vers le dashboard du rôle réel de l'utilisateur
+    return <Navigate to={getRolePath(user.role)} replace />;
+  }
 
-            <ClientTable
-              clientsFiltres={clientsAffiches}
-              chargement={chargement}
-              erreur={erreur}
-              pageActive={currentPageActive} setPageActive={setPageActive}
-              totalPages={totalPagesCalculated} totalElements={totalElements}
-              onClientDeleted={() => setRefreshTrigger(prev => prev + 1)}
-              onViewDetails={(client) => setClientSelectionne(client)}
-            />
-          </>
-        ) : (
-          <CompteTable />
-        )}
-      </main>
+  return children;
+};
 
-      <CreateClientModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onClientCreated={() => setRefreshTrigger(prev => prev + 1)} />
-      <CreateCompteModal isOpen={isCompteModalOpen} onClose={() => setIsCompteModalOpen(false)} onCompteCreated={() => setRefreshTrigger(prev => prev + 1)} />
-      <ClientDetailsModal isOpen={!!clientSelectionne} onClose={() => setClientSelectionne(null)} client={clientSelectionne} />
+/** Retourne le chemin de dashboard pour un rôle donné */
+const getRolePath = (role) => {
+  switch (role) {
+    case 'DIRECTEUR':      return '/dashboard/directeur';
+    case 'PORTEFEUILLEUR': 
+    case 'COMMERCIAL':
+    case 'CONSEILLER':
+    default:               return '/dashboard/conseiller';
+  }
+};
+
+/**
+ * Redirection intelligente depuis "/" vers le dashboard du rôle connecté.
+ * Keycloak garantit qu'un user est toujours connecté ici.
+ */
+const RootRedirect = () => {
+  const { user } = useAuth();
+  if (!user) return <Navigate to="/login" replace />;
+  return <Navigate to={getRolePath(user.role)} replace />;
+};
+
+/** Écran d'erreur de rôle — affiché si aucun rôle métier n'est configuré */
+const RoleErrorScreen = ({ message }) => (
+  <div style={{
+    display: 'flex', flexDirection: 'column', alignItems: 'center',
+    justifyContent: 'center', height: '100vh',
+    fontFamily: "'Inter', sans-serif", background: '#0F172A', color: 'white',
+  }}>
+    <div style={{
+      background: 'rgba(232,57,29,0.1)', border: '1px solid rgba(232,57,29,0.3)',
+      borderRadius: '1.5rem', padding: '2.5rem', maxWidth: '420px', textAlign: 'center',
+    }}>
+      <div style={{ fontSize: '2.5rem', marginBottom: '1rem' }}>🔐</div>
+      <h2 style={{ fontWeight: 800, fontSize: '1.1rem', marginBottom: '0.75rem' }}>
+        Accès non autorisé
+      </h2>
+      <p style={{ color: 'rgba(255,255,255,0.5)', fontSize: '0.875rem', lineHeight: 1.6 }}>
+        {message}
+        <br />
+        Contactez votre administrateur Keycloak pour qu'un rôle vous soit assigné
+        (<strong>CONSEILLER</strong>, <strong>PORTEFEUILLEUR</strong> ou <strong>DIRECTEUR</strong>).
+      </p>
+      <button
+        onClick={() => {
+          import('./keycloak').then(module => {
+            module.default.logout({ redirectUri: window.location.origin });
+          });
+        }}
+        style={{
+          marginTop: '1.5rem', padding: '0.6rem 1.5rem',
+          background: 'linear-gradient(135deg, #E8391D, #FFC000)',
+          border: 'none', borderRadius: '10px', color: 'white',
+          fontWeight: 700, fontSize: '0.85rem', cursor: 'pointer',
+        }}
+      >
+        Se déconnecter
+      </button>
     </div>
-  )
+  </div>
+);
+
+// ─── Application principale ──────────────────────────────────────────────────
+function App() {
+  return (
+    <AuthProvider>
+      <Router>
+        <Routes>
+          {/* Redirection racine → dashboard selon rôle Keycloak */}
+          <Route path="/" element={<RootRedirect />} />
+
+          {/* Page de connexion personnalisée */}
+          <Route path="/login" element={<Login />} />
+
+          {/* Dashboard Unifié (Conseiller / Commercial / Portefeuilleur) */}
+          <Route
+            path="/dashboard/conseiller"
+            element={
+              <ProtectedRoute allowedRole={['CONSEILLER', 'COMMERCIAL', 'PORTEFEUILLEUR']}>
+                <DashboardConseiller />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Dashboard Directeur */}
+          <Route
+            path="/dashboard/directeur"
+            element={
+              <ProtectedRoute allowedRole="DIRECTEUR">
+                <DashboardDirecteur />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* Toute route inconnue → redirection intelligente */}
+          <Route path="*" element={<RootRedirect />} />
+        </Routes>
+      </Router>
+    </AuthProvider>
+  );
 }
 
-export default App
+export default App;

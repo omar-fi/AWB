@@ -1,0 +1,10 @@
+.DS_Store
+*.log
+moteur-ia-python/.full_recalc_version
+moteur-ia-python/.nb_ops_last_train
+keycloak-data/
+node_modules/
+dist/
+target/
+.idea/
+.vscode/

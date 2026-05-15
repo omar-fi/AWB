@@ -34,10 +34,21 @@ public class PredictionVisite {
     @Column(columnDefinition = "TEXT")
     private String insightGenai;
 
+    @Column(columnDefinition = "TEXT")
+    private String strategiePrescrite;
+
     private LocalDateTime dateDernierCalcul;
 
     @OneToOne
     @JoinColumn(name = "client_id")
-    @JsonIgnoreProperties({"prediction", "comptes"})
+    @JsonIgnoreProperties({"prediction", "comptes", "agence"})
     private Client client;
+
+    @Column(name = "score_churn")
+    private Double scoreChurn;
+
+    @Column(name = "niveau_risque")
+    private String niveauRisque;
+
+    private Double fiabilite;
 }

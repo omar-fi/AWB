@@ -1,0 +1,55 @@
+@startuml Diagramme_Architecture_Fonctionnelle
+
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Arial
+skinparam roundcorner 10
+skinparam componentStyle uml2
+
+skinparam component {
+    BackgroundColor #FFFFFF
+    BorderColor #1A1A1A
+    FontColor #1A1A1A
+}
+
+skinparam package {
+    BackgroundColor #F4F6F7
+    BorderColor #90A4AE
+}
+
+title AWB IA Predictive -- Architecture Fonctionnelle (Vue Logique)
+
+package "Interface Utilisateur (IHM)" {
+    component [Tableau de Bord Proactif] as TDB
+    component [Explorateur de Portefeuille] as PORT
+    component [Module de Reporting KPI] as KPI
+}
+
+package "Services Metier & Gestion" {
+    component [Gestionnaire de Clients] as G_CLIENT
+    component [Orchestrateur de Securite] as G_SEC
+    component [Journal des Actions] as G_ACTION
+}
+
+package "Moteur d'Intelligence Artificielle" {
+    component [Moteur de Scoring (Probabilites)] as IA_SCORE
+    component [Generateur d'Explications (Insights)] as IA_INSIGHT
+    component [Analyse de Risque & Churn] as IA_RISK
+}
+
+package "Entrepôt de Donnees" {
+    component [Historique des Operations] as DATA_HIST
+    component [Base de Connaissance IA] as DATA_IA
+}
+
+' Relations logiques
+TDB ..> IA_SCORE : Consulte
+PORT ..> IA_INSIGHT : Affiche
+KPI ..> IA_RISK : Agrege
+
+G_CLIENT -- DATA_HIST : Lit/Ecrit
+G_ACTION -- G_CLIENT : Trace
+IA_SCORE -- DATA_HIST : Analyse
+IA_INSIGHT -- IA_SCORE : Interprete
+IA_RISK -- DATA_IA : Persiste
+
+@enduml

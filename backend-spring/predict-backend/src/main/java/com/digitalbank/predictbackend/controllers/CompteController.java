@@ -35,6 +35,11 @@ public class CompteController {
         return ResponseEntity.ok(compteRepository.findAll(PageRequest.of(page, size)));
     }
 
+    @GetMapping("/client/{clientId}")
+    public ResponseEntity<java.util.List<Compte>> getComptesByClient(@PathVariable Long clientId) {
+        return ResponseEntity.ok(compteRepository.findByClientId(clientId));
+    }
+
     @PostMapping("/client/{clientId}")
     public ResponseEntity<Compte> createCompte(@PathVariable Long clientId, @RequestBody Compte nouveauCompte) {
 
@@ -55,6 +60,16 @@ public class CompteController {
     public ResponseEntity<Void> supprimerCompte(@PathVariable Long id) {
         compteRepository.deleteById(id);
         return ResponseEntity.noContent().build();
+    }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<Compte> updateCompte(@PathVariable Long id, @RequestBody Compte updatedData) {
+        return compteRepository.findById(id).map(compte -> {
+            if (updatedData.getNumeroCompte() != null) compte.setNumeroCompte(updatedData.getNumeroCompte());
+            if (updatedData.getTypeCompte() != null) compte.setTypeCompte(updatedData.getTypeCompte());
+            if (updatedData.getSolde() != null) compte.setSolde(updatedData.getSolde());
+            return ResponseEntity.ok(compteRepository.save(compte));
+        }).orElse(ResponseEntity.notFound().build());
     }
     @PostMapping("/{id}/operations")
     public ResponseEntity<?> effectuerOperation(@PathVariable Long id, @RequestBody OperationRequest request) {
