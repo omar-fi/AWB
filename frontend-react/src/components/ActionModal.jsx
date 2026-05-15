@@ -1,27 +1,7 @@
 import React, { useState } from 'react';
 import api from '../api/axiosConfig';
-import { X, CheckCircle, MessageSquare, Loader2, Sparkles } from 'lucide-react';
+import { X, CheckCircle, MessageSquare, Loader2, Brain, Target, CreditCard } from 'lucide-react';
 import Swal from 'sweetalert2';
-
-const getCommercialScript = (client) => {
-    const operation = client.operationPrevue || 'passage en agence';
-    const horaire = client.plageHorairePrevue || 'horaire à confirmer';
-    const dateVisite = client.datePrevueAjustee || client.datePrevue;
-    const dateLabel = dateVisite
-        ? new Date(dateVisite).toLocaleDateString('fr-FR', { day: '2-digit', month: 'long' })
-        : 'à venir';
-
-    if (/credit|pr[eé]t|financement/i.test(operation)) {
-        return `Le client est attendu le ${dateLabel} (${horaire}). Pendant l'échange, valide son besoin de financement et propose une offre complémentaire adaptée.`;
-    }
-    if (/carte|paiement|retrait|guichet/i.test(operation)) {
-        return `Le client est attendu le ${dateLabel} (${horaire}). Profite du passage pour proposer un service digital ou une carte mieux adaptée à son usage.`;
-    }
-    if (/versement|d[eé]p[oô]t|epargne|placement/i.test(operation)) {
-        return `Le client est attendu le ${dateLabel} (${horaire}). Oriente l'entretien vers une solution d'épargne ou de placement en lien avec son opération.`;
-    }
-    return `Le client est attendu le ${dateLabel} (${horaire}). Commence par confirmer son besoin en agence, puis propose un service ou produit pertinent.`;
-};
 
 const ActionModal = ({ isOpen, onClose, client, banquierId, onSuccess }) => {
     const [formData, setFormData] = useState({ statut: 'VENDU', commentaire: '' });
@@ -72,15 +52,34 @@ const ActionModal = ({ isOpen, onClose, client, banquierId, onSuccess }) => {
                 </div>
 
                 <form onSubmit={handleSubmit} className="p-6 space-y-5">
-                    <div className="p-3 rounded-2xl border transition-all" style={{ background: '#FFF7E6', borderColor: '#FDE68A' }}>
-                        <div className="flex items-center gap-2 font-black text-xs uppercase tracking-widest" style={{ color: '#92400E' }}>
-                            <Sparkles size={14} style={{ color: '#FFC000' }} />
-                            Script commercial conseillé
+                {/* Stratégie IA réelle (si disponible) */}
+                {(() => {
+                    const strategie = client.strategiePrescrite
+                        || client.strategie_prescrite
+                        || client.prediction?.strategiePrescrite
+                        || client.prediction?.strategie_prescrite;
+                    const operation = client.operationPrevue || client.prediction?.operationPrevue;
+                    if (!strategie && !operation) return null;
+                    return (
+                        <div className="p-4 rounded-2xl border" style={{ background: 'linear-gradient(135deg, #0f0a00, #1a1000)', borderColor: '#FFC00040' }}>
+                            <div className="flex items-center gap-2 mb-2">
+                                <Brain size={14} style={{ color: '#FFC000' }} />
+                                <span className="font-black text-xs uppercase tracking-widest" style={{ color: '#FFC000' }}>Recommandation IA XGBoost</span>
+                            </div>
+                            {operation && (
+                                <div className="flex items-center gap-2 mb-2 px-3 py-1.5 rounded-lg" style={{ background: 'rgba(255,192,0,0.08)' }}>
+                                    <CreditCard size={12} style={{ color: '#FFC000' }} />
+                                    <span className="text-xs text-amber-200 font-semibold">Opération prévue : <span className="font-black text-white">{operation}</span></span>
+                                </div>
+                            )}
+                            {strategie && (
+                                <p className="text-xs leading-relaxed" style={{ color: '#D4B483' }}>
+                                    {strategie}
+                                </p>
+                            )}
                         </div>
-                        <p className="mt-3 text-xs text-amber-800 leading-relaxed pl-6 border-t border-amber-200/50 pt-3">
-                            {getCommercialScript(client)}
-                        </p>
-                    </div>
+                    );
+                })()}
 
                     <div>
                         <label className="block text-sm font-black text-gray-700 mb-2">Résultat de l'échange</label>

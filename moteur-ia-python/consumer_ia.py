@@ -136,6 +136,14 @@ def _format_operation_label(motif: str) -> str:
 import holidays
 _FERIES_MAROC = holidays.Morocco()
 
+def _today_maroc() -> datetime.date:
+    """
+    Retourne la date du jour côté Maroc (UTC+1, fixe depuis 2019).
+    Indispensable pour que le batch nocturne (00h00 Maroc = 23h00 UTC)
+    stocke la bonne date (aujourd'hui Maroc, pas hier UTC).
+    """
+    return (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).date()
+
 def _est_jour_ferie_maroc(date: datetime.date) -> bool:
     return date in _FERIES_MAROC
 
@@ -196,7 +204,7 @@ def _prev_jour_ouvre(date: datetime.date) -> datetime.date:
     return date
 
 def _fenetre_calendaire():
-    today = datetime.date.today()
+    today = _today_maroc()
     # La fenêtre commence AUJOURD'HUI si la banque est ouverte, sinon le prochain jour ouvrable
     min_date = today if _est_jour_ouvrable(today) else _next_jour_ouvre(today)
     if today.month == 12:
@@ -467,7 +475,7 @@ def _predire_date_visite(probabilite, base_datetime=None, profil=None):
       Samedi         : fermé
       Dimanche       : Fermé (jamais sélectionné)
     """
-    today = datetime.date.today()
+    today = _today_maroc()  # Date Maroc (UTC+1) pour cohérence avec le batch nocturne
 
     # ── Sélection déterministe du décalage en jours ouvrables ─────────────────
     # Déterministe : on utilise la partie décimale de la probabilité comme seed
@@ -523,14 +531,22 @@ def _build_features_next_event_at(profil, type_compte: str, montant_courant: flo
     dt = base_datetime if isinstance(base_datetime, datetime.datetime) else datetime.datetime.now()
     heure = dt.hour + dt.minute / 60.0
     d = dt.date()
-    df.loc[0, "current_heure_decimale"] = heure
-    df.loc[0, "current_jour_semaine"] = d.weekday()
-    df.loc[0, "current_est_weekend"] = int(d.weekday() >= 5)
-    df.loc[0, "current_est_ferie"] = int(_est_jour_ferie_maroc(d))
-    df.loc[0, "current_dans_horaires_agence"] = int(
-        (d.weekday() < 5 and not _est_jour_ferie_maroc(d) and 8.0 <= heure <= 16.5)
-    )
-    df.loc[0, "current_est_heure_pointe"] = int(11.0 <= heure <= 14.0)
+    # Cast colonnes enrichies en float64 pour éviter le FutureWarning pandas
+    enriched_cols = [
+        "current_heure_decimale", "current_jour_semaine", "current_est_weekend",
+        "current_est_ferie", "current_dans_horaires_agence", "current_est_heure_pointe"
+    ]
+    for col in enriched_cols:
+        if col in df.columns:
+            df[col] = df[col].astype(float)
+    df.loc[0, "current_heure_decimale"] = float(heure)
+    df.loc[0, "current_jour_semaine"] = float(d.weekday())
+    df.loc[0, "current_est_weekend"] = float(int(d.weekday() >= 5))
+    df.loc[0, "current_est_ferie"] = float(int(_est_jour_ferie_maroc(d)))
+    df.loc[0, "current_dans_horaires_agence"] = float(int(
+        d.weekday() < 5 and not _est_jour_ferie_maroc(d) and 8.0 <= heure <= 16.5
+    ))
+    df.loc[0, "current_est_heure_pointe"] = float(int(11.0 <= heure <= 14.0))
     return df
 
 def _predire_next_datetime(profil, type_compte: str, montant: float, base_datetime: datetime.datetime):
@@ -550,7 +566,7 @@ def _predire_next_datetime(profil, type_compte: str, montant: float, base_dateti
 
     # ── Forcer un jour ouvrable (exclut weekends + jours fériés Maroc) ────────
     # Si candidate est aujourd'hui et que c'est ouvrable, on garde aujourd'hui
-    today = datetime.date.today()
+    today = _today_maroc()  # Date Maroc (UTC+1)
     if candidate <= today and _est_jour_ouvrable(today):
         target_date = today
     else:
@@ -579,7 +595,7 @@ def _doit_venir_aujourdhui(profil: dict, probabilite: float, niveau_risque: str 
       ≥ 55% + risque → priorité urgente (CRITIQUE/ALERTE)
       ≥ 58% + signal → activité récente / ratio hors-horaires
     """
-    today = datetime.date.today()
+    today = _today_maroc()  # Date Maroc (UTC+1)
     if not _est_jour_ouvrable(today):
         return False
     if probabilite >= 62.0:
