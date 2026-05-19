@@ -1,19 +1,17 @@
+import os
+import sys
 import json
 import joblib
 import pandas as pd
 import mysql.connector
-import os
-import requests
 import datetime
-import random
-import math
+import holidays
 import numpy as np
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
-from langchain_core.prompts import ChatPromptTemplate
 
 load_dotenv()
 
+# --- CONFIGURATION DB ---
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST",     "localhost"),
     "user":     os.getenv("DB_USER",     "root"),
@@ -21,39 +19,22 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME",     "attijari_predict_db"),
 }
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+def get_db_connection():
+    return mysql.connector.connect(**DB_CONFIG)
 
-print("🚀 Initialisation du Microservice IA Hybride (Full Batch MySQL)...")
-
-OPERATION_LABELS = {
-    "RETRAIT":           "Retrait Espèces",
-    "VIREMENT_EMIS":     "Virement Émis",
-    "VIREMENT_RECU":     "Virement Reçu",
-    "VERSEMENT":         "Versement Espèces",
-    "PAIEMENT_FACTURE":  "Paiement de Facture",
-    "PAIEMENT_CARTE":    "Paiement par Carte",
-    "REMISE_CHEQUE":     "Remise de Chèque",
-    "PAIEMENT TPE":      "Paiement TPE",
-    "RETRAIT GUICHET":   "Retrait Guichet",
-    "DEMANDE DE CREDIT": "Demande de Crédit",
-    "PLACEMENT":         "Placement Épargne",
-    "RETRAIT_EPARGNE":   "Retrait Épargne",
-    "CREATION_CLIENT":   "Création de Profil Client",
-}
-
-# ── Chargement des modèles XGBoost ────────────────────────────────────────────
+# --- CHARGEMENT DES MODÈLES ---
 try:
     model_visite = joblib.load('xgboost_optimise.pkl')
-    print("🧠 Modèle XGBoost (visite) chargé avec succès !")
+    print("🧠 Modèle XGBoost (visite) chargé avec succès par l'Agent 2 !")
 except Exception as e:
     print(f"❌ Impossible de charger xgboost_optimise.pkl : {e}")
-    exit()
+    exit(1)
 
 try:
     model_operation  = joblib.load('xgboost_model.pkl')
     encoder_segment  = joblib.load('encoder_segment.pkl')
     encoder_motif    = joblib.load('encoder_motif.pkl')
-    print("🧠 Modèle XGBoost (operation) chargé avec succès !")
+    print("🧠 Modèle XGBoost (operation) chargé avec succès par l'Agent 2 !")
 except Exception as e:
     print(f"⚠️  Modèle opération indisponible ({e})")
     model_operation = None
@@ -65,7 +46,7 @@ try:
     encoder_segment_next = joblib.load('encoder_segment_next.pkl')
     encoder_type_compte = joblib.load('encoder_type_compte.pkl')
     encoder_next_operation = joblib.load('encoder_next_operation.pkl')
-    print("🧠 Modèles Next Event chargés avec succès !")
+    print("🧠 Modèles Next Event chargés avec succès par l'Agent 2 !")
 except Exception as e:
     print(f"⚠️  Modèles Next Event indisponibles ({e})")
     model_next_date = None
@@ -96,10 +77,9 @@ COLONNES_VISITE_ENRICHIES = COLONNES_VISITE + [
 
 try:
     COLONNES_VISITE = joblib.load('xgboost_visite_features.pkl')
-    print(f"🧩 Features visite enrichies chargées ({len(COLONNES_VISITE)} colonnes).")
 except Exception:
-    # Compatibilité avec les anciens modèles XGBoost entraînés sur 24 colonnes.
-    COLONNES_VISITE = COLONNES_VISITE_ENRICHIES if getattr(model_visite, "n_features_in_", 24) == len(COLONNES_VISITE_ENRICHIES) else COLONNES_VISITE
+    if 'model_visite' in globals() and getattr(model_visite, "n_features_in_", 24) == len(COLONNES_VISITE_ENRICHIES):
+        COLONNES_VISITE = COLONNES_VISITE_ENRICHIES
 
 ALL_OP_TYPES = [
     "RETRAIT", "VERSEMENT", "VIREMENT_EMIS", "VIREMENT_RECU",
@@ -109,13 +89,11 @@ ALL_OP_TYPES = [
     "PLACEMENT", "RETRAIT_EPARGNE"
 ]
 
-NEXT_FEATURE_COLS = (
-    [
-        "seg_enc", "type_compte_enc", "nombre_operations", "montant_total",
-        "montant_moyen", "moy_retrait", "nb_ops_30j", "ratio_solde_habitude",
-        "has_compte_epargne", "solde_total", "solde_moyen_compte", "montant_courant",
-    ] + ALL_OP_TYPES
-)
+NEXT_FEATURE_COLS = [
+    "seg_enc", "type_compte_enc", "nombre_operations", "montant_total",
+    "montant_moyen", "moy_retrait", "nb_ops_30j", "ratio_solde_habitude",
+    "has_compte_epargne", "solde_total", "solde_moyen_compte", "montant_courant"
+] + ALL_OP_TYPES
 
 NEXT_FEATURE_COLS_ENRICHIES = NEXT_FEATURE_COLS + [
     "current_heure_decimale", "current_jour_semaine", "current_est_weekend",
@@ -124,24 +102,33 @@ NEXT_FEATURE_COLS_ENRICHIES = NEXT_FEATURE_COLS + [
 
 try:
     NEXT_FEATURE_COLS = joblib.load('xgboost_next_features.pkl')
-    print(f"🧩 Features next-event enrichies chargées ({len(NEXT_FEATURE_COLS)} colonnes).")
 except Exception:
     if 'model_next_date' in globals() and getattr(model_next_date, "n_features_in_", len(NEXT_FEATURE_COLS)) == len(NEXT_FEATURE_COLS_ENRICHIES):
         NEXT_FEATURE_COLS = NEXT_FEATURE_COLS_ENRICHIES
+
+OPERATION_LABELS = {
+    "RETRAIT":           "Retrait Espèces",
+    "VIREMENT_EMIS":     "Virement Émis",
+    "VIREMENT_RECU":     "Virement Reçu",
+    "VERSEMENT":         "Versement Espèces",
+    "PAIEMENT_FACTURE":  "Paiement de Facture",
+    "PAIEMENT_CARTE":    "Paiement par Carte",
+    "REMISE_CHEQUE":     "Remise de Chèque",
+    "PAIEMENT TPE":      "Paiement TPE",
+    "RETRAIT GUICHET":   "Retrait Guichet",
+    "DEMANDE DE CREDIT": "Demande de Crédit",
+    "PLACEMENT":         "Placement Épargne",
+    "RETRAIT_EPARGNE":   "Retrait Épargne",
+    "CREATION_CLIENT":   "Création de Profil Client",
+}
+
+_FERIES_MAROC = holidays.Morocco()
 
 def _format_operation_label(motif: str) -> str:
     if motif is None: return motif
     return OPERATION_LABELS.get(motif) or OPERATION_LABELS.get(str(motif).upper()) or motif
 
-import holidays
-_FERIES_MAROC = holidays.Morocco()
-
 def _today_maroc() -> datetime.date:
-    """
-    Retourne la date du jour côté Maroc (UTC+1, fixe depuis 2019).
-    Indispensable pour que le batch nocturne (00h00 Maroc = 23h00 UTC)
-    stocke la bonne date (aujourd'hui Maroc, pas hier UTC).
-    """
     return (datetime.datetime.utcnow() + datetime.timedelta(hours=1)).date()
 
 def _est_jour_ferie_maroc(date: datetime.date) -> bool:
@@ -181,13 +168,6 @@ def _features_calendrier_dt(value) -> dict:
     }
 
 def _est_jour_ouvrable(date: datetime.date) -> bool:
-    """
-    Retourne True si la banque est ouverte ce jour-là (Maroc AWB).
-    • Lundi–Vendredi (weekday 0–4) : ouvert 08h00–16h30
-    • Samedi (weekday 5)             : fermé
-    • Dimanche (weekday 6)           : fermé
-    • Jours fériés marocains          : fermé
-    """
     if date.weekday() == 5: return False          # Samedi : fermé
     if date.weekday() == 6: return False          # Dimanche : fermé
     if _est_jour_ferie_maroc(date): return False   # Férié : fermé
@@ -197,29 +177,6 @@ def _next_jour_ouvre(date: datetime.date) -> datetime.date:
     while not _est_jour_ouvrable(date):
         date += datetime.timedelta(days=1)
     return date
-
-def _prev_jour_ouvre(date: datetime.date) -> datetime.date:
-    while not _est_jour_ouvrable(date):
-        date -= datetime.timedelta(days=1)
-    return date
-
-def _fenetre_calendaire():
-    today = _today_maroc()
-    # La fenêtre commence AUJOURD'HUI si la banque est ouverte, sinon le prochain jour ouvrable
-    min_date = today if _est_jour_ouvrable(today) else _next_jour_ouvre(today)
-    if today.month == 12:
-        next_month_year, next_month_month = today.year + 1, 1
-    else:
-        next_month_year, next_month_month = today.year, today.month + 1
-    if next_month_month == 12:
-        last_day = datetime.date(next_month_year + 1, 1, 1) - datetime.timedelta(days=1)
-    else:
-        last_day = datetime.date(next_month_year, next_month_month + 1, 1) - datetime.timedelta(days=1)
-    max_date = _prev_jour_ouvre(last_day)
-    return min_date, max_date
-
-def get_db_connection():
-    return mysql.connector.connect(**DB_CONFIG)
 
 def _get_last_type_compte(client_id: int) -> str:
     try:
@@ -259,10 +216,10 @@ def _get_profil_client(client_id):
                    SUM(CASE WHEN DAYOFWEEK(date_heure_operation) = 1 THEN 1 ELSE 0 END) AS nb_ops_dimanche,
                    SUM(CASE
                        WHEN DAYOFWEEK(date_heure_operation) = 7
-                            AND (HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60) BETWEEN 8 AND 13
+                             AND (HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60) BETWEEN 8 AND 13
                        THEN 0
                        WHEN DAYOFWEEK(date_heure_operation) BETWEEN 2 AND 6
-                            AND (HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60) BETWEEN 8 AND 16.5
+                             AND (HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60) BETWEEN 8 AND 16.5
                        THEN 0
                        ELSE 1
                    END) AS nb_ops_hors_horaires,
@@ -272,7 +229,6 @@ def _get_profil_client(client_id):
             WHERE client_id = %s
         """, (client_id,))
         hist = cursor.fetchone()
-        # Nombre réel d'opérations sur les 30 derniers jours
         cursor.execute("SELECT COUNT(*) AS nb_ops_30j FROM historique_operation WHERE client_id = %s AND date_heure_operation >= DATE_SUB(NOW(), INTERVAL 30 DAY)", (client_id,))
         hist_30j = cursor.fetchone()
         cursor.execute("SELECT DATE(date_heure_operation) AS d FROM historique_operation WHERE client_id = %s", (client_id,))
@@ -319,12 +275,6 @@ def _get_profil_client(client_id):
         return None
 
 def _predire_visite(profil, type_op_actuel, montant):
-    """
-    Prédit la probabilité de visite basée sur le profil réel du client.
-    Retourne le score honnête du modèle XGBoost sans forçage artificiel.
-    Un ajustement métier léger est appliqué pour pondérer selon le segment
-    et l'historique, mais sans imposer un plancher arbitraire.
-    """
     features = {col: 0 for col in COLONNES_VISITE}
     if profil:
         features['nombre_operations'] = profil.get('nombre_operations', 1) + 1
@@ -361,7 +311,6 @@ def _predire_visite(profil, type_op_actuel, montant):
     raw_proba = float(model_visite.predict_proba(df)[0][1])
     pred_label = int(model_visite.predict(df)[0])
 
-    # Calibration pour éviter les scores collés à 99% pour presque tout le monde.
     raw_pct = raw_proba * 100.0
     probabilite_finale = 50.0 + (raw_pct - 50.0) * 0.45
     ajustement = 0.0
@@ -398,7 +347,6 @@ def _predire_visite(profil, type_op_actuel, montant):
 
     probabilite_finale = float(np.clip(probabilite_finale + ajustement, 12.0, 93.0))
 
-    # ── Statut lisible selon le seuil de confiance ────────────────────────────
     if probabilite_finale >= 75:
         statut = "VISITE_PROBABLE"
     elif probabilite_finale >= 55:
@@ -408,40 +356,11 @@ def _predire_visite(profil, type_op_actuel, montant):
 
     return pred_label, probabilite_finale, statut
 
-# ── Plages horaires bancaires AWB (Mohamed V / Maroc) ────────────────────────
-# Lundi–Vendredi : 08h00–16h30 │ Samedi : Fermé │ Dimanche : Fermé
-_HEURE_OUVERTURE_SEMAINE = 8
-_HEURE_FERMETURE_SEMAINE = 16   # la dernière demie-heure clôt à 16:30
-
-# Créneaux horaires d'affluence : (heure, minute, label)
-# Chaque créneau est pondéré selon la probabilité de visite.
 _CRENEAUX_HAUTE_FREQUENTATION  = [(9, 0), (9, 30), (10, 0), (10, 30), (11, 0), (11, 30)]
 _CRENEAUX_NORMALE_FREQUENTATION = [(8, 30), (13, 0), (13, 30), (14, 0), (14, 30), (15, 0)]
 _CRENEAUX_BASSE_FREQUENTATION   = [(8, 0), (15, 30), (16, 0), (16, 30)]
-_CRENEAUX_SAMEDI                 = [(8, 30), (9, 0), (9, 30), (10, 0), (10, 30), (11, 0), (11, 30), (12, 0), (12, 30)]
-
-
-def _creneaux_valides_pour_date(date: datetime.date) -> list:
-    """Retourne les créneaux (heure, minute) valides selon le jour de la semaine."""
-    if date.weekday() == 5:   # Samedi fermé
-        return [(9, 0)]
-    elif date.weekday() == 6: # Dimanche — ne devrait jamais arriver (jour non ouvrable)
-        return [(9, 0)]
-    else:                     # Lundi–Vendredi
-        return _CRENEAUX_HAUTE_FREQUENTATION + _CRENEAUX_NORMALE_FREQUENTATION
-
 
 def _choisir_creneau(probabilite: float, date: datetime.date, profil: dict | None = None) -> tuple:
-    """
-    Choisit un créneau horaire déterministe (sans hasard) selon :
-      - le jour de la semaine
-      - la probabilité de visite (forte prob → heure de pointe)
-
-    Règles AWB :
-      Probabilité >= 75% → créneau de haute fréquentation (9h–12h)
-      Probabilité >= 50% → créneau normal (8h30, 13h–15h)
-      Probabilité <  50% → créneau bas (ouverture/fermeture)
-    """
     if probabilite >= 75:
         creneaux = _CRENEAUX_HAUTE_FREQUENTATION
     elif probabilite >= 50:
@@ -449,8 +368,6 @@ def _choisir_creneau(probabilite: float, date: datetime.date, profil: dict | Non
     else:
         creneaux = _CRENEAUX_NORMALE_FREQUENTATION + _CRENEAUX_BASSE_FREQUENTATION
 
-    # Sélection déterministe : on indexe par probabilité dans la liste de créneaux
-    # → même probabilité = même créneau (reproductible, sans random)
     seed_client = 0
     if profil:
         seed_client = int(profil.get("client_id", 0) or 0)
@@ -459,52 +376,28 @@ def _choisir_creneau(probabilite: float, date: datetime.date, profil: dict | Non
     idx = (int(probabilite * 10) + seed_client + date.day) % len(creneaux)
     return creneaux[idx]
 
-
 def _predire_date_visite(probabilite, base_datetime=None, profil=None):
-    """
-    Prédit la date et l'heure de visite de façon DÉTERMINISTE.
-
-    Règle métier AWB basée sur le score de probabilité :
-      Prob >= 75% → visite AUJOURD'HUI (si jour ouvrable) sinon prochain jour ouvrable
-      Prob >= 60% → visite dans 1 à 3 jours ouvrables
-      Prob >= 50% → visite dans 4 à 10 jours ouvrables
-      Prob <  50% → visite dans 11 à 25 jours ouvrables
-
-    L'heure respecte les horaires bancaires AWB :
-      Lundi–Vendredi : 08h00–16h30
-      Samedi         : fermé
-      Dimanche       : Fermé (jamais sélectionné)
-    """
-    today = _today_maroc()  # Date Maroc (UTC+1) pour cohérence avec le batch nocturne
-
-    # ── Sélection déterministe du décalage en jours ouvrables ─────────────────
-    # Déterministe : on utilise la partie décimale de la probabilité comme seed
-    # pour choisir dans la plage → même score = même date (reproductible)
+    today = _today_maroc()
     seed = int((probabilite % 1.0) * 100) if probabilite % 1.0 > 0 else int(probabilite)
 
     if probabilite >= 62:
-        # Haute probabilité → le client est attendu AUJOURD'HUI si l'agence est ouverte.
         if _est_jour_ouvrable(today):
-            target_date = today          # Aujourd'hui !
+            target_date = today
         else:
             target_date = _next_jour_ouvre(today + datetime.timedelta(days=1))
     elif probabilite >= 55:
-        # Probabilité élevée → dans 1 à 3 jours ouvrables
-        decalage = (seed % 3) + 1        # 1, 2 ou 3
+        decalage = (seed % 3) + 1
         candidate = today + datetime.timedelta(days=decalage)
         target_date = _next_jour_ouvre(candidate)
     elif probabilite >= 45:
-        # Probabilité moyenne → dans 4 à 10 jours ouvrables
-        decalage = (seed % 7) + 4        # 4 à 10
+        decalage = (seed % 7) + 4
         candidate = today + datetime.timedelta(days=decalage)
         target_date = _next_jour_ouvre(candidate)
     else:
-        # Probabilité basse → dans 11 à 25 jours ouvrables
-        decalage = (seed % 15) + 11      # 11 à 25
+        decalage = (seed % 15) + 11
         candidate = today + datetime.timedelta(days=decalage)
         target_date = _next_jour_ouvre(candidate)
 
-    # ── Créneau horaire déterministe respectant les horaires bancaires ─────────
     h, m = _choisir_creneau(probabilite, target_date, profil=profil)
     return target_date.strftime("%Y-%m-%d"), f"{h:02d}:{m:02d}"
 
@@ -531,7 +424,6 @@ def _build_features_next_event_at(profil, type_compte: str, montant_courant: flo
     dt = base_datetime if isinstance(base_datetime, datetime.datetime) else datetime.datetime.now()
     heure = dt.hour + dt.minute / 60.0
     d = dt.date()
-    # Cast colonnes enrichies en float64 pour éviter le FutureWarning pandas
     enriched_cols = [
         "current_heure_decimale", "current_jour_semaine", "current_est_weekend",
         "current_est_ferie", "current_dans_horaires_agence", "current_est_heure_pointe"
@@ -550,52 +442,32 @@ def _build_features_next_event_at(profil, type_compte: str, montant_courant: flo
     return df
 
 def _predire_next_datetime(profil, type_compte: str, montant: float, base_datetime: datetime.datetime):
-    """
-    Prédit la prochaine date/heure de visite via les modèles XGBoost next-event.
-    Respecte intégralement les horaires et jours ouvrables AWB Maroc.
-    """
     if not all([model_next_date, model_next_time, profil]): return None, None
     df = _build_features_next_event_at(profil, type_compte, montant, base_datetime)
 
-    # ── Prédiction du nombre de jours jusqu'à la prochaine visite ─────────────
     delta_days = float(model_next_date.predict(df)[0])
-    delta_days = max(0.0, delta_days)   # 0.0 = aujourd'hui autorisé si modèle le prédit
+    delta_days = max(0.0, delta_days)
 
     base_dt = max(base_datetime, datetime.datetime.now())
     candidate = (base_dt + datetime.timedelta(days=delta_days)).date()
 
-    # ── Forcer un jour ouvrable (exclut weekends + jours fériés Maroc) ────────
-    # Si candidate est aujourd'hui et que c'est ouvrable, on garde aujourd'hui
-    today = _today_maroc()  # Date Maroc (UTC+1)
+    today = _today_maroc()
     if candidate <= today and _est_jour_ouvrable(today):
         target_date = today
     else:
         target_date = _next_jour_ouvre(candidate)
 
-    # ── Prédiction de l'heure (format décimal, ex: 10.5 = 10h30) ─────────────
     hour_float = float(model_next_time.predict(df)[0])
     hour_raw   = int(hour_float)
     minute_raw = int((hour_float - hour_raw) * 60)
 
-    # ── Application des contraintes horaires AWB ──────────────────────────────
     hour   = max(8, min(hour_raw, 16))
     minute = min(minute_raw, 30) if hour == 16 else minute_raw
 
     return target_date.strftime("%Y-%m-%d"), f"{hour:02d}:{minute:02d}"
 
-
 def _doit_venir_aujourdhui(profil: dict, probabilite: float, niveau_risque: str = "FAIBLE") -> bool:
-    """
-    Décide explicitement si un client doit être classé dans les visites d'aujourd'hui.
-    XGBoost donne le score, puis on applique des signaux comportementaux simples
-    pour éviter que le modèle next-event repousse tous les clients à demain.
-
-    Seuils recalibrés sur la distribution réelle des scores (12–66%) :
-      ≥ 62%          → prédit aujourd'hui inconditionnellement
-      ≥ 55% + risque → priorité urgente (CRITIQUE/ALERTE)
-      ≥ 58% + signal → activité récente / ratio hors-horaires
-    """
-    today = _today_maroc()  # Date Maroc (UTC+1)
+    today = _today_maroc()
     if not _est_jour_ouvrable(today):
         return False
     if probabilite >= 62.0:
@@ -618,14 +490,9 @@ def _predire_next_operation_future(profil, type_compte: str, montant: float):
     return _format_operation_label(str(motif))
 
 def _predire_next_operation_from_history(client_id: int, type_op: str, montant: float, base_dt: datetime.datetime) -> str:
-    """
-    Détermine l'opération la plus probable pour le prochain passage du client
-    en se basant sur son historique réel (opération la plus fréquente).
-    """
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
-        # Opération la plus fréquente dans l'historique (toutes périodes)
         cursor.execute(
             """
             SELECT type_operation, COUNT(*) AS freq
@@ -644,184 +511,7 @@ def _predire_next_operation_from_history(client_id: int, type_op: str, montant: 
             return _format_operation_label(row["type_operation"]) or row["type_operation"]
     except Exception as e:
         print(f"⚠️ Erreur _predire_next_operation_from_history client {client_id}: {e}")
-    # Dernier recours : l'opération actuelle
     return _format_operation_label(type_op) or type_op or "Opération Bancaire"
-
-
-def _generer_strategie_comportementale(
-    profil: dict,
-    niveau_risque: str,
-    probabilite: float,
-    operation_prevue: str,
-    date_prevue: str,
-    plage_horaire: str,
-) -> str:
-    """
-    Génère une stratégie de satisfaction/rétention sans dépendre du LLM.
-    Elle exploite le comportement bancaire réel : activité récente, solde,
-    retraits, comptes, opérations hors horaires, fériés/week-end et segment.
-    """
-    if not profil:
-        return (
-            f"Préparer un accueil personnalisé le {date_prevue} à {plage_horaire}, "
-            f"vérifier le besoin lié à {operation_prevue} et mettre à jour le dossier client."
-        )
-
-    segment = str(profil.get("segment_metier", "Standard")).upper()
-    solde = float(profil.get("solde_actuel", 0.0) or 0.0)
-    solde_moyen = float(profil.get("solde_moyen_compte", 0.0) or 0.0)
-    nb_ops = int(profil.get("nombre_operations", 0) or 0)
-    nb_ops_30j = int(profil.get("nb_operations_30j", 0) or 0)
-    moy_retraits = float(profil.get("moyenne_retraits_30j", 0.0) or 0.0)
-    has_epargne = bool(profil.get("has_compte_epargne", 0))
-    ratio_hors_horaires = float(profil.get("ratio_ops_hors_horaires", 0.0) or 0.0)
-    ratio_weekend = float(profil.get("ratio_ops_weekend", 0.0) or 0.0)
-    jours_inactif = float(profil.get("jours_depuis_derniere_operation", 999) or 999)
-
-    actions = []
-
-    if niveau_risque in ("CRITIQUE", "ÉLEVÉ"):
-        actions.append("contacter le client avant sa visite pour comprendre le motif d'insatisfaction")
-        actions.append("prévoir un entretien de rétention avec un conseiller senior ou le directeur d'agence")
-    elif niveau_risque in ("ALERTE", "SOUS SURVEILLANCE"):
-        actions.append("préparer un entretien de fidélisation et vérifier les irritants récents")
-    else:
-        actions.append("organiser un accueil de courtoisie et valoriser la relation avec l'agence")
-
-    if solde_moyen > 1000 and solde < solde_moyen * 0.6:
-        actions.append("analyser la baisse du solde et proposer une solution de sécurisation des flux")
-    if solde > 50000 and not has_epargne:
-        actions.append("proposer une solution d'épargne ou de placement adaptée au profil")
-    if moy_retraits > 0 and solde > 0 and moy_retraits > solde * 0.35:
-        actions.append("discuter des retraits importants et proposer une alternative plus sécurisée")
-    if nb_ops > 20 and nb_ops_30j == 0:
-        actions.append("réactiver le client avec une offre de retour et une vérification de satisfaction")
-    if ratio_hors_horaires >= 0.35 or ratio_weekend >= 0.25:
-        actions.append("proposer un accompagnement digital et un rendez-vous sur un créneau plus confortable")
-    if any(x in segment for x in ["PRO", "PME", "TPE", "PROFESSIONNEL"]):
-        actions.append("étudier un besoin de trésorerie, TPE, leasing ou optimisation des encaissements")
-    elif "VIP" in segment:
-        actions.append("préparer une offre premium et un traitement prioritaire en agence")
-    elif "ETUDIANT" in segment or "JEUNE" in segment:
-        actions.append("proposer un pack jeune, frais réduits et accompagnement budget")
-
-    actions_uniques = []
-    for action in actions:
-        if action not in actions_uniques:
-            actions_uniques.append(action)
-
-    return (
-        f"Pour éviter la perte du client et améliorer sa satisfaction : "
-        f"{'; '.join(actions_uniques[:4])}. "
-        f"À préparer pour {operation_prevue} le {date_prevue} à {plage_horaire} "
-        f"(score visite {probabilite:.1f}%)."
-    )
-
-
-def _generer_insight_llm(client_id, type_op, montant, probabilite, statut, operation_prevue, date_prevue, plage_horaire, profil=None, niveau_risque="FAIBLE"):
-    """
-    Génère un message d'explication de l'Agent IA basé sur les données réelles
-    du client. Si Groq est indisponible, un fallback factuel est utilisé.
-    """
-    import time
-
-    # ── FALLBACK SANS CLÉ API ────────────────────────────────────────────────
-    if not GROQ_API_KEY:
-        if profil:
-            nb_ops = profil.get('nombre_operations', 0)
-            ops_30j = profil.get('nb_operations_30j', 0)
-            solde = profil.get('solde_actuel', 0)
-            segment = profil.get('segment_metier', 'Particulier')
-            strategie = _generer_strategie_comportementale(
-                profil, niveau_risque, probabilite, operation_prevue, date_prevue, plage_horaire
-            )
-            return (
-                f"Analyse de l'Agent : Basé sur {nb_ops} opérations historiques ({ops_30j} ce mois) "
-                f"et un solde de {solde:.0f} MAD ({segment}), le modèle prédit une visite "
-                f"pour '{operation_prevue}' le {date_prevue} à {plage_horaire} "
-                f"avec une fiabilité de {probabilite:.1f}%. Stratégie : {strategie}"
-            )
-        return f"Analyse de l'Agent : Prédiction '{operation_prevue}' le {date_prevue} ({probabilite:.1f}%)."
-
-    # ── PACING : On espace les appels pour respecter les limites RPM de Groq ─
-    time.sleep(1.2)
-
-    try:
-        # ── CONTEXTE FACTUEL COMPLET issu du profil client réel ─────────────
-        segment = "Particulier"
-        if profil:
-            nb_ops  = profil.get('nombre_operations', 0)
-            solde   = profil.get('solde_actuel', 0)
-            segment = profil.get('segment_metier', 'Particulier')
-            ops_30j = profil.get('nb_operations_30j', 0)
-            moy_ret = profil.get('moyenne_retraits_30j', 0)
-            montant_moyen = profil.get('montant_moyen', 0)
-            has_epargne = profil.get('has_compte_epargne', 0)
-
-            # On identifie l'opération la plus fréquente dans l'historique
-            op_types = ALL_OP_TYPES
-            op_counts = {op: profil.get(op, 0) for op in op_types}
-            op_dominante = max(op_counts, key=op_counts.get) if any(v > 0 for v in op_counts.values()) else type_op
-
-            contexte = (
-                f"Profil client — Segment: {segment} | "
-                f"Solde actuel: {solde:,.0f} MAD | "
-                f"Total opérations: {nb_ops} | "
-                f"Activité 30 jours: {ops_30j} opérations | "
-                f"Retrait moyen mensuel: {moy_ret:,.0f} MAD | "
-                f"Montant moyen par opération: {montant_moyen:,.0f} MAD | "
-                f"Opération dominante dans l'historique: {op_dominante} | "
-                f"Compte épargne: {'Oui' if has_epargne else 'Non'} | "
-                f"Opérations hors horaires: {profil.get('nb_ops_hors_horaires', 0)} | "
-                f"Opérations week-end/fériés: {profil.get('nb_ops_weekend', 0) + profil.get('nb_ops_ferie', 0)} | "
-                f"Jours depuis dernière opération: {profil.get('jours_depuis_derniere_operation', 999):.0f} | "
-                f"Dernière opération connue: {type_op} de {montant:,.0f} MAD."
-            )
-        else:
-            contexte = f"Données limitées. Dernière opération: {type_op} de {montant:,.0f} MAD."
-
-        prompt = (
-            f"Tu es l'Expert en Relation Client et Santé Bancaire d'Attijariwafa Bank. "
-            f"Analyse la SANTÉ BANCAIRE (Satisfaction, Fidélité, Risque d'Attrition) de ce client :\n"
-            f"[{contexte}]\n"
-            f"L'IA XGBoost prédit une visite le {date_prevue} ({probabilite:.1f}% de confiance) pour '{operation_prevue}'. "
-            f"Le profil indique un NIVEAU DE RISQUE : {niveau_risque}.\n"
-            f"Tâche : Analyse son comportement bancaire et propose une stratégie précise pour ne pas le perdre, "
-            f"améliorer sa satisfaction en agence et préparer le bon service au bon moment.\n"
-            f"Réponds en français, de façon percutante et factuelle, sur UNE SEULE ligne au format suivant :\n"
-            f"Santé : [Diagnostic bref de satisfaction/comportement] | Stratégie : [Action commerciale concrète]"
-        )
-
-        llm = ChatGroq(
-            model="llama-3.1-8b-instant",
-            groq_api_key=GROQ_API_KEY,
-            temperature=0.75,
-            max_tokens=200,
-            timeout=25,
-            max_retries=5
-        )
-        result = (ChatPromptTemplate.from_messages([("user", "{prompt}")]) | llm).invoke({"prompt": prompt})
-        raw = result.content.strip()
-        # S'assurer que le message respecte un minimum le format
-        if "Santé :" not in raw:
-            raw = f"Santé : Stable | Stratégie : {raw}"
-        return raw
-
-    except Exception as e:
-        print(f"⚠️ Erreur LLM ({client_id}): {e}")
-        # Fallback factuel structuré basé sur les données réelles
-        if profil:
-            nb_ops = profil.get('nombre_operations', 0)
-            solde = profil.get('solde_actuel', 0)
-            strategie = _generer_strategie_comportementale(
-                profil, niveau_risque, probabilite, operation_prevue, date_prevue, plage_horaire
-            )
-            return (
-                f"Santé : Suivi attentif ({niveau_risque}). Avec {nb_ops} opérations et un solde de "
-                f"{solde:,.0f} MAD, une action personnalisée est nécessaire. Stratégie : {strategie}"
-            )
-        return f"Stratégie de l'Agent : Adapter l'approche commerciale lors de la visite du {date_prevue} (Risque: {niveau_risque})."
-
 
 def _sauvegarder_prediction_db(client_id, probabilite, operation_prevue, date_prevue, explication, plage_horaire, strategie="", niveau_risque="FAIBLE"):
     try:
@@ -835,10 +525,6 @@ def _sauvegarder_prediction_db(client_id, probabilite, operation_prevue, date_pr
     except Exception as e: print(f"⚠️ Erreur sauvegarde DB : {e}")
 
 def _get_derniere_operation_reelle(client_id: int) -> dict:
-    """
-    Récupère la dernière opération réelle du client depuis la DB.
-    Utilisé par le batch nocturne quand montant=0 (pas d'événement Kafka récent).
-    """
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -862,22 +548,102 @@ def _get_derniere_operation_reelle(client_id: int) -> dict:
     return {"type_op": "Profil Initial", "montant": 0.0, "event_time": datetime.datetime.now()}
 
 
-def recalculer_prediction(client_id, action="BATCH", type_op="Profil Initial", montant=0.0, type_compte=None, event_time=None):
+def calculer_predictions_pour_client(client_id: int, type_op: str = "Profil Initial", montant: float = 0.0, type_compte: str = None, event_time = None, action: str = "BATCH") -> dict:
     """
-    Recalcule la prédiction de visite pour un client.
-    Délègue à l'Agent de Prédiction (agent_prediction.py).
+    Exécute les modèles de prédiction de visite XGBoost pour un client donné et sauvegarde en DB.
     """
-    from agent_prediction import calculer_predictions_pour_client
-    try:
-        res = calculer_predictions_pour_client(
-            client_id=client_id,
-            type_op=type_op,
-            montant=montant,
-            type_compte=type_compte,
-            event_time=event_time,
-            action=action
-        )
-        print(f"✅ [Agent 2] Client {client_id} | Score: {res['probabilite']:.1f}% | Date: {res['date_prevue']} | {res['niveau_risque']}")
-    except Exception as e:
-        print(f"⚠️  Erreur client {client_id} : {e}")
+    if action in ("BATCH", "BATCH_NOCTURNE") and (not type_op or type_op in ("Profil Initial", "")) and montant == 0.0:
+        derniere = _get_derniere_operation_reelle(client_id)
+        type_op   = derniere["type_op"]
+        montant   = derniere["montant"]
+        if event_time is None:
+            event_time = derniere["event_time"]
 
+    profil = _get_profil_client(client_id)
+    prediction, probabilite, statut = _predire_visite(profil, type_op, montant)
+    base_dt = event_time if isinstance(event_time, datetime.datetime) else datetime.datetime.now()
+    type_compte = type_compte or _get_last_type_compte(client_id)
+
+    if probabilite >= 62.0:
+        date_p, time_p = _predire_date_visite(probabilite, base_dt, profil=profil)
+    else:
+        date_p, time_p = _predire_next_datetime(profil, type_compte, montant, base_dt)
+        if not date_p or not time_p:
+            date_p, time_p = _predire_date_visite(probabilite, base_dt, profil=profil)
+
+    op_p = _predire_next_operation_from_history(client_id, type_op, montant, base_dt)
+    if not op_p or op_p in ("Opération Bancaire", "Profil Initial", ""):
+        op_p = _predire_next_operation_future(profil, type_compte, montant)
+
+    if not op_p or op_p in ("Opération Bancaire", "Profil Initial", ""):
+        op_p = "Opération Bancaire"
+
+    # Calcul du niveau de risque basique pour décider s'il doit venir aujourd'hui
+    from analysis_engine import calculer_niveau_risque
+    solde_actuel  = profil.get("solde_actuel", 0.0)       if profil else 0.0
+    solde_moyen   = profil.get("solde_moyen_compte", 0.0) if profil else 0.0
+    nb_ops_30j    = profil.get("nb_operations_30j", 0)    if profil else 0
+    tot_ops       = profil.get("nombre_operations", 0)    if profil else 0
+    moy_retraits  = profil.get("moyenne_retraits_30j", 0.0) if profil else 0.0
+
+    score_churn = 0.0
+    if solde_moyen > 1000:
+        ratio_solde = solde_actuel / solde_moyen
+        if ratio_solde < 0.4:   score_churn += 0.6
+        elif ratio_solde < 0.7: score_churn += 0.3
+    if solde_actuel > 0 and moy_retraits > (solde_actuel * 0.4):
+        score_churn += 0.4
+    if tot_ops > 20 and nb_ops_30j == 0:
+        score_churn += 0.5
+    score_churn = min(score_churn, 0.95)
+    niveau_risque = calculer_niveau_risque(score_churn)
+
+    if _doit_venir_aujourdhui(profil, probabilite, niveau_risque):
+        date_p, time_p = _predire_date_visite(probabilite, base_dt, profil=profil)
+
+    insight_attente = "Analyse IA en attente..."
+    strategie_attente = ""
+
+    _sauvegarder_prediction_db(
+        client_id, probabilite, op_p, date_p, 
+        insight_attente, time_p, strategie_attente, niveau_risque
+    )
+    
+    return {
+        "client_id": client_id,
+        "probabilite": probabilite,
+        "operation_prevue": op_p,
+        "date_prevue": date_p,
+        "plage_horaire": time_p,
+        "niveau_risque": niveau_risque
+    }
+
+def run_batch_predictions() -> tuple:
+    print("🚀 [Agent 2] Début du calcul des prédictions (Batch)...")
+    nb_ok = 0
+    nb_ko = 0
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id FROM client ORDER BY id")
+        clients = cursor.fetchall()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"❌ Erreur connexion DB : {e}")
+        return 0, 0
+
+    for client in clients:
+        cid = client["id"]
+        try:
+            calculer_predictions_pour_client(cid, action="BATCH")
+            nb_ok += 1
+        except Exception as e:
+            nb_ko += 1
+            print(f"❌ Erreur prédiction client {cid} : {e}")
+            
+    print(f"✅ [Agent 2] Prédictions terminées. Réussites: {nb_ok}, Échecs: {nb_ko}")
+    return nb_ok, nb_ko
+
+if __name__ == "__main__":
+    run_batch_predictions()

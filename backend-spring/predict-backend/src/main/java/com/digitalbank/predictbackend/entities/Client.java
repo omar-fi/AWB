@@ -33,6 +33,10 @@ public class Client {
     @OneToOne(mappedBy = "client", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
     @JsonIgnoreProperties("client")
     private PredictionVisite prediction;
+
+    @OneToMany(mappedBy = "client", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @JsonIgnoreProperties("client")
+    private List<Reclamation> reclamations;
     
     @ManyToOne
     @JoinColumn(name = "agence_id")

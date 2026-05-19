@@ -67,6 +67,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/v1/predictions/**").hasAnyRole("CONSEILLER", "PORTEFEUILLEUR", "DIRECTEUR")
                 .requestMatchers("/api/v1/admin/**").hasRole("DIRECTEUR")
                 .requestMatchers("/api/v1/actions/**").hasAnyRole("CONSEILLER", "PORTEFEUILLEUR", "DIRECTEUR")
+                .requestMatchers("/api/v1/reclamations/**").hasAnyRole("CONSEILLER", "PORTEFEUILLEUR", "DIRECTEUR")
                 .requestMatchers("/api/v1/banquiers/me/**").authenticated()
                 .requestMatchers("/api/v1/banquiers/**").hasRole("DIRECTEUR")
                 .requestMatchers("/api/v1/debug/**").permitAll()
