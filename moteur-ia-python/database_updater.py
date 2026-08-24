@@ -8,9 +8,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ==================================================================
-# LOGGING
-# ==================================================================
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -18,9 +15,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("database_updater")
 
-# ==================================================================
-# CONFIGURATION BASE DE DONNÉES (via variables d'environnement)
-# ==================================================================
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST",     "localhost"),
     "user":     os.getenv("DB_USER",     "root"),
@@ -56,10 +50,10 @@ def verifier_et_migrer_schema(conn):
         "score_probabilite_global": "ALTER TABLE prediction_visite ADD COLUMN IF NOT EXISTS score_probabilite_global DOUBLE;",
         "date_dernier_calcul":      "ALTER TABLE prediction_visite ADD COLUMN IF NOT EXISTS date_dernier_calcul DATETIME;",
         "niveau_risque":            "ALTER TABLE prediction_visite ADD COLUMN IF NOT EXISTS niveau_risque VARCHAR(20);",
+        "score_churn":              "ALTER TABLE prediction_visite ADD COLUMN IF NOT EXISTS score_churn DOUBLE;",
     }
     try:
         cursor = conn.cursor(dictionary=True)
-        # Récupération du schéma actuel de la table
         cursor.execute("""
             SELECT COLUMN_NAME 
             FROM INFORMATION_SCHEMA.COLUMNS 
@@ -76,7 +70,6 @@ def verifier_et_migrer_schema(conn):
                 logger.info(f"   ✅ Colonne '{colonne}' ajoutée avec succès.")
                 migrations += 1
         
-        # S'assurer que client_id est bien UNIQUE KEY (condition du ON DUPLICATE KEY UPDATE)
         cursor.execute("""
             SELECT COUNT(*) AS cnt FROM INFORMATION_SCHEMA.STATISTICS
             WHERE TABLE_SCHEMA = %s
@@ -118,7 +111,6 @@ def sauvegarder_predictions(predictions_list: List[Dict[str, Any]]) -> bool:
         logger.warning("⚠️ Aucune prédiction à sauvegarder.")
         return False
 
-    # Requête UPSERT optimisée pour MySQL (batch)
     UPSERT_SQL = """
         INSERT INTO prediction_visite 
             (client_id, score_probabilite_global, insight_genai, strategie_prescrite, niveau_risque, date_dernier_calcul)
@@ -136,12 +128,10 @@ def sauvegarder_predictions(predictions_list: List[Dict[str, Any]]) -> bool:
     cursor = None
     try:
         conn = get_db_connection()
-        # Vérification et migration automatique du schéma si besoin
         verifier_et_migrer_schema(conn)
         
         cursor = conn.cursor()
         
-        # Préparation du jeu de données (tuples ordonnés selon la requête)
         data = [
             (
                 p.get("client_id"),
@@ -153,7 +143,6 @@ def sauvegarder_predictions(predictions_list: List[Dict[str, Any]]) -> bool:
             for p in predictions_list
         ]
         
-        # Exécution batch (executemany = bien plus performant qu'une boucle d'inserts)
         cursor.executemany(UPSERT_SQL, data)
         conn.commit()
         
@@ -162,14 +151,12 @@ def sauvegarder_predictions(predictions_list: List[Dict[str, Any]]) -> bool:
 
     except Error as e:
         logger.error(f"❌ Erreur de transaction MySQL : {e}")
-        # Rollback pour annuler la transaction partielle et protéger la cohérence des données
         if conn and conn.is_connected():
             conn.rollback()
             logger.warning("↩️  Rollback effectué — aucune donnée corrompue.")
         return False
 
     finally:
-        # Fermeture propre des ressources
         if cursor:
             cursor.close()
         if conn and conn.is_connected():
@@ -177,11 +164,7 @@ def sauvegarder_predictions(predictions_list: List[Dict[str, Any]]) -> bool:
             logger.info("🔌 Connexion MySQL fermée.")
 
 
-# ==================================================================
-# ZONE DE TEST LOCAL
-# ==================================================================
 if __name__ == "__main__":
-    # Jeu de test simulant la sortie de l'orchestrateur Batch
     predictions_test = [
         {
             "client_id": 1,

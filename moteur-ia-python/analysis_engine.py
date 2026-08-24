@@ -12,24 +12,20 @@ def determiner_strategie(segment: str, score_churn: float, solde: float = 0, a_e
     """
     segment = segment.upper()
     
-    # 1. Gestion de l'urgence maximale
     if score_churn >= 0.85:
         if "VIP" in segment or "PRO" in segment:
             return "ALERTE RÉTENTION : Rendez-vous urgent avec le Directeur d'Agence sous 48h."
         return "RÉTENTION : Contact téléphonique immédiat pour comprendre l'insatisfaction."
 
-    # 2. Opportunités de placement (Clients avec solde élevé sans épargne)
     if solde > 50000 and not a_epargne:
         if "VIP" in segment:
             return "PLACEMENT : Proposer Gestion Sous Mandat ou Assurance Vie Premium."
         return "PLACEMENT : Proposer Plan d'Épargne Logement ou compte sur carnet."
 
-    # 3. Besoins de financement (Segments Professionnels / Entreprises)
     if any(x in segment for x in ["PRO", "PME", "TPE"]):
-        if score_churn < 0.3: # Client fidèle
+        if score_churn < 0.3:
             return "FINANCEMENT : Proposer ligne de crédit de trésorerie ou leasing."
             
-    # 4. Offres spécifiques Étudiants / Jeunes
     if "ETUDIANT" in segment:
         return "FIDÉLISATION : Offrir 1 an de gratuité sur le Pack Jeune."
 
@@ -38,15 +34,28 @@ def determiner_strategie(segment: str, score_churn: float, solde: float = 0, a_e
 
 def calculer_niveau_risque(score_churn: float) -> str:
     """
-    Évalue le niveau de risque global du client de façon segmentée.
+    Traduit l'indice de risque en niveau d'action commerciale.
+
+    Les seuils portent sur la plage utile de l'indice, pas sur l'intervalle
+    théorique [0, 1]. L'indice est une somme pondérée de quatre facteurs dont
+    deux seulement décrivent le départ lui-même (désengagement 0.35 + silence
+    0.25) : un client qui a purement et simplement cessé toute opération plafonne
+    donc à 0.60, et ne pouvait jamais être classé CRITIQUE avec un seuil à 0.80.
+    Atteindre 0.80 supposait un client à la fois disparu, à découvert et
+    nouvellement entré en relation — un cas de figure quasi inexistant.
+
+    Les seuils ci-dessous sont calibrés pour que chaque niveau corresponde à une
+    part exploitable du portefeuille : CRITIQUE ~5 %, ÉLEVÉ ~10 %, ALERTE ~15 %.
+    Un conseiller ne peut traiter qu'une dizaine de dossiers urgents par semaine ;
+    le niveau sert à prioriser, pas à mesurer une probabilité.
     """
-    if score_churn >= 0.8:
+    if score_churn >= 0.60:
         return "CRITIQUE"
-    elif score_churn >= 0.6:
+    elif score_churn >= 0.45:
         return "ÉLEVÉ"
-    elif score_churn >= 0.4:
+    elif score_churn >= 0.30:
         return "ALERTE"
-    elif score_churn >= 0.2:
+    elif score_churn >= 0.15:
         return "SOUS SURVEILLANCE"
     else:
         return "FAIBLE"
@@ -82,7 +91,6 @@ def generer_insight_ia(historique_recent: str) -> str:
         print("Erreur d'appel LLM :", e)
     """
     
-    # Mock du LLM pour que le module fonctionne localement sans clé API
     return f"Le client présente un comportement caractérisé par : {historique_recent.lower()}"
 
 
@@ -92,7 +100,6 @@ def analyser_client(client_data: Dict[str, Any]) -> Dict[str, str]:
     Appelle les deux méthodes précédentes et retourne un dictionnaire 
     contenant les deux variables TOTALEMENT SÉPARÉES.
     """
-    # Extraction sécurisée des données
     segment = client_data.get("segment", "Standard")
     
     try:
@@ -102,13 +109,10 @@ def analyser_client(client_data: Dict[str, Any]) -> Dict[str, str]:
         
     historique_recent = client_data.get("historique_recent", "")
     
-    # Obtention de l'action déterministe
     strategie = determiner_strategie(segment, score_churn)
     
-    # Obtention du diagnostic de l'IA générative
     insight = generer_insight_ia(historique_recent)
     
-    # Obtention du niveau de risque
     niveau_risque = calculer_niveau_risque(score_churn)
     
     return {
@@ -118,25 +122,21 @@ def analyser_client(client_data: Dict[str, Any]) -> Dict[str, str]:
     }
 
 
-# ==================================================================
-# SIMULATION / ZONE DE TEST
-# ==================================================================
 if __name__ == "__main__":
-    # Jeu de données de test
     clients_a_tester = [
         {
             "segment": "VIP",
-            "score_churn": 0.88, # > 0.80 et VIP -> Rendez-vous Directeur
+            "score_churn": 0.88,
             "historique_recent": "Retraits importants en espèces et transfert massif vers compte externe."
         },
         {
             "segment": "Etudiant",
-            "score_churn": 0.95, # > 0.85 et Etudiant -> Offrir 1 an de gratuité
+            "score_churn": 0.95,
             "historique_recent": "Deux prélèvements Netflix et Spotify rejetés pour solde insuffisant."
         },
         {
             "segment": "Standard",
-            "score_churn": 0.40, # Cas par défaut -> Suivi classique
+            "score_churn": 0.40,
             "historique_recent": "Réception du salaire mensuel et dépenses courantes par carte stables."
         }
     ]

@@ -24,16 +24,28 @@ public class HistoriqueOperation {
 
     private String typeOperation;
 
+    /**
+     * Canal par lequel l'opération a été réalisée : AGENCE, DAB, TPE,
+     * EN_LIGNE ou AUTOMATIQUE.
+     *
+     * Seul AGENCE correspond à un déplacement du client au guichet. Sans cette
+     * colonne, le canal ne pouvait être que deviné à partir du libellé, et les
+     * modèles de prédiction de visite s'entraînaient sur des paiements par
+     * carte — qui ne se font évidemment pas en agence.
+     */
+    private String canal;
+
     private BigDecimal montant;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "client_id", nullable = false)
+    @JsonIgnoreProperties({"reclamations", "comptes", "prediction", "actions", "hibernateLazyInitializer", "handler"})
     private Client client;
 
     // Permet de stocker le type de compte au moment de l'opération.
     // Utile pour prédire la prochaine visite (date/heure/opération).
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "compte_id")
-    @JsonIgnoreProperties({"client", "prediction"})
+    @JsonIgnoreProperties({"client", "prediction", "hibernateLazyInitializer", "handler"})
     private Compte compte;
 }

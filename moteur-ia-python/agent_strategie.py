@@ -15,9 +15,6 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  AUTO-DÉTECTION DES SIGNAUX DE RÉCLAMATION depuis le comportement bancaire
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
     """
@@ -29,7 +26,7 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
     if not profil:
         return {"signaux": [], "urgence": "FAIBLE", "resume_texte": "", "nb_signaux": 0}
 
-    signaux      = []   # liste de dicts {type, description, poids}
+    signaux      = []
     poids_total  = 0.0
 
     solde         = profil.get("solde_actuel", 0.0)
@@ -46,7 +43,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
     ratio_hors    = nb_ops_hors  / max(1, nb_ops)
     ratio_weekend = nb_ops_weekend / max(1, nb_ops)
 
-    # ── 1. Signal FRAIS — Retraits excessifs par rapport au solde ────────────
     if solde > 0 and moy_retraits > 0:
         ratio_retrait = moy_retraits / max(1, solde)
         if ratio_retrait > 0.5:
@@ -61,7 +57,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
             })
             poids_total += poids
 
-    # ── 2. Signal DELAI — Baisse marquée de l'activité récente ───────────────
     if nb_ops > 15 and nb_ops_30j == 0:
         signaux.append({
             "type": "DELAI",
@@ -83,7 +78,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
         })
         poids_total += 0.3
 
-    # ── 3. Signal SERVICE — Opérations hors horaires / weekend fréquentes ────
     if ratio_hors >= 0.40 or ratio_weekend >= 0.30:
         signaux.append({
             "type": "SERVICE",
@@ -96,7 +90,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
         })
         poids_total += 0.4
 
-    # ── 4. Signal ERREUR_OPERATION — Solde anormalement bas vs historique ────
     if solde_moyen > 2000 and solde < solde_moyen * 0.30:
         signaux.append({
             "type": "ERREUR_OPERATION",
@@ -108,7 +101,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
         })
         poids_total += 0.65
 
-    # ── 5. Signal COMPORTEMENT — Risque critique confirmé ─────────────────────
     if "CRITIQUE" in niveau_risque:
         signaux.append({
             "type": "COMPORTEMENT",
@@ -120,7 +112,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
         })
         poids_total += 0.8
 
-    # ── 6. Signal PRODUIT — Client éligible mais sans épargne ────────────────
     if solde > 30000 and not has_epargne:
         signaux.append({
             "type": "PRODUIT",
@@ -132,7 +123,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
         })
         poids_total += 0.35
 
-    # ── 7. Signal SEGMENT — Besoins professionnels non adressés ──────────────
     if any(x in segment for x in ["PRO", "PME", "TPE", "PROFESSIONNEL"]) and nb_ops_30j == 0:
         signaux.append({
             "type": "SERVICE",
@@ -144,7 +134,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
         })
         poids_total += 0.5
 
-    # ── Calcul de l'urgence globale ───────────────────────────────────────────
     if poids_total >= 1.5 or "CRITIQUE" in niveau_risque:
         urgence = "CRITIQUE"
     elif poids_total >= 0.8:
@@ -167,9 +156,6 @@ def _detecter_signaux_reclamation(profil: dict, niveau_risque: str) -> dict:
     }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  STRATÉGIE DÉTERMINISTE — Règles métier enrichies des signaux auto-détectés
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _generer_strategie_comportementale(
     profil: dict, niveau_risque: str, probabilite: float,
@@ -200,7 +186,6 @@ def _generer_strategie_comportementale(
 
     actions = []
 
-    # ── Priorité 1 : Actions basées sur les signaux auto-détectés ────────────
     if urgence == "CRITIQUE":
         actions.append("organiser en urgence un entretien avec le Directeur d'Agence pour sécuriser la relation")
     elif urgence == "ALERTE":
@@ -221,7 +206,6 @@ def _generer_strategie_comportementale(
     if "COMPORTEMENT" in types_signaux:
         actions.append("escalader le dossier au responsable agence pour une prise en charge prioritaire")
 
-    # ── Priorité 2 : Règles comportementales complémentaires ─────────────────
     if solde_moyen > 1000 and solde < solde_moyen * 0.6 and "ERREUR_OPERATION" not in types_signaux:
         actions.append("analyser la baisse du solde et proposer une solution de sécurisation des flux")
     if solde > 50000 and not has_epargne and "PRODUIT" not in types_signaux:
@@ -230,7 +214,6 @@ def _generer_strategie_comportementale(
         if "SERVICE" not in types_signaux:
             actions.append("présenter les solutions digitales AWB pour une disponibilité 24h/24")
 
-    # ── Priorité 3 : Segment métier ───────────────────────────────────────────
     if any(x in segment for x in ["PRO", "PME", "TPE", "PROFESSIONNEL"]):
         actions.append("étudier ses besoins de trésorerie, TPE, leasing ou optimisation des encaissements")
     elif "VIP" in segment:
@@ -238,7 +221,6 @@ def _generer_strategie_comportementale(
     elif "ETUDIANT" in segment or "JEUNE" in segment:
         actions.append("proposer un pack jeune, frais réduits et accompagnement budget")
 
-    # Dédoublonnage
     vus = []
     for a in actions:
         if a not in vus:
@@ -256,9 +238,6 @@ def _generer_strategie_comportementale(
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  INSIGHT LLM (Groq) — Enrichi des signaux comportementaux auto-détectés
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _generer_insight_llm(
     client_id, type_op, montant, probabilite, operation_prevue,
@@ -271,7 +250,6 @@ def _generer_insight_llm(
     """
     rec = signaux_rec or {}
 
-    # ── Fallback sans clé Groq ────────────────────────────────────────────────
     if not GROQ_API_KEY:
         if profil:
             nb_ops    = profil.get('nombre_operations', 0)
@@ -288,10 +266,9 @@ def _generer_insight_llm(
             )
         return f"Stratégie de l'Agent : Adapter l'approche lors de la visite du {date_prevue} (Risque: {niveau_risque})."
 
-    time.sleep(1.2)  # Pacing Groq
+    time.sleep(1.2)
 
     try:
-        # ── Construction du contexte comportemental ───────────────────────────
         if profil:
             nb_ops      = profil.get('nombre_operations', 0)
             solde       = profil.get('solde_actuel', 0)
@@ -310,7 +287,6 @@ def _generer_insight_llm(
         else:
             contexte_comportement = f"Données limitées. Dernière opération: {type_op} de {montant:,.0f} MAD."
 
-        # ── Contexte des signaux auto-détectés ───────────────────────────────
         nb_sig    = rec.get("nb_signaux", 0)
         urgence   = rec.get("urgence", "FAIBLE")
         if nb_sig > 0:
@@ -328,16 +304,20 @@ def _generer_insight_llm(
             f"[ANALYSE COMPORTEMENTALE IA]{context_signaux}\n\n"
             f"L'IA XGBoost prédit une visite le {date_prevue} ({probabilite:.1f}% de confiance) "
             f"pour '{operation_prevue}'. Niveau de risque global : {niveau_risque}.\n\n"
-            f"Sur la base de ces données comportementales, propose une stratégie relationnelle concrète "
-            f"pour anticiper les insatisfactions, fidéliser ce client et préparer la meilleure expérience "
-            f"possible lors de sa prochaine visite en agence.\n\n"
-            f"Réponds en français, percutant et factuel, sur UNE SEULE ligne :\n"
-            f"Santé : [Diagnostic bref du comportement et des risques détectés] | "
-            f"Stratégie : [Action commerciale concrète personnalisée]"
+            f"Réponds en français, sur UNE SEULE ligne, exactement à ce format :\n"
+            f"Santé : [Diagnostic du comportement, 12 mots maximum] | "
+            f"Stratégie : [LE service ou produit AWB unique à proposer, 15 mots maximum]\n\n"
+            f"RÈGLES STRICTES :\n"
+            f"- UN SEUL service dans la Stratégie. Jamais d'énumération, jamais de « et ... et ... ».\n"
+            f"- Le conseiller lit ceci en 3 secondes avant d'appeler : va droit au but.\n"
+            f"- Exemple attendu : Santé : Inactif 99 jours, solde stable | "
+            f"Stratégie : Proposer le Compte sur Carnet pour valoriser son solde dormant."
         )
 
+        # max_tokens bas = garde-fou matériel contre l'empilement d'offres :
+        # le prompt seul n'empêche pas le modèle d'énumérer.
         llm    = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=GROQ_API_KEY,
-                          temperature=0.75, max_tokens=220, timeout=25, max_retries=5)
+                          temperature=0.6, max_tokens=110, timeout=25, max_retries=5)
         result = (ChatPromptTemplate.from_messages([("user", "{prompt}")]) | llm).invoke({"prompt": prompt})
         raw    = result.content.strip()
         if "Santé :" not in raw:
@@ -353,9 +333,6 @@ def _generer_insight_llm(
         return f"Santé : Suivi attentif ({niveau_risque}). | Stratégie : {strategie}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  PERSISTANCE
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _sauvegarder_analyse_db(client_id, insight, strategie):
     try:
@@ -373,9 +350,6 @@ def _sauvegarder_analyse_db(client_id, insight, strategie):
         print(f"❌ Erreur sauvegarde Analyse DB pour client {client_id} : {e}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ORCHESTRATION — Analyse d'un client
-# ══════════════════════════════════════════════════════════════════════════════
 
 def analyser_strategie_pour_client(client_id: int, prediction_data: dict = None) -> dict:
     """
@@ -417,14 +391,12 @@ def analyser_strategie_pour_client(client_id: int, prediction_data: dict = None)
     type_op     = derniere_op["type_op"]
     montant     = derniere_op["montant"]
 
-    # ── AUTO-DÉTECTION des signaux d'insatisfaction ───────────────────────────
     signaux = _detecter_signaux_reclamation(profil, niveau_risque)
     nb_sig  = signaux.get("nb_signaux", 0)
     urgence = signaux.get("urgence", "FAIBLE")
     if nb_sig > 0:
         print(f"   🔍 Client {client_id} : {nb_sig} signal(s) auto-détecté(s) [{urgence}] → {signaux['types']}")
 
-    # ── Génération de l'insight ───────────────────────────────────────────────
     insight = _generer_insight_llm(
         client_id, type_op, montant, probabilite,
         op_p, date_p, time_p,
@@ -432,7 +404,6 @@ def analyser_strategie_pour_client(client_id: int, prediction_data: dict = None)
         signaux_rec=signaux
     )
 
-    # ── Extraction de la stratégie depuis le retour LLM ──────────────────────
     final_strategie = ""
     if "Stratégie :" in insight:
         try:
@@ -458,9 +429,6 @@ def analyser_strategie_pour_client(client_id: int, prediction_data: dict = None)
     }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  BATCH — Traitement de tous les clients en attente
-# ══════════════════════════════════════════════════════════════════════════════
 
 def run_batch_strategies(force_all=False) -> tuple:
     print("🚀 [Agent 3] Début de la génération des stratégies (Batch)...")

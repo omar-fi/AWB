@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration du logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
@@ -35,7 +34,6 @@ def sauvegarder_prediction(client_id, prediction, risque, insight):
         conn = get_db_connection()
         cursor = conn.cursor()
         
-        # Vérifier si une prédiction existe déjà
         cursor.execute("SELECT id FROM prediction_visite WHERE client_id = %s", (client_id,))
         exists = cursor.fetchone()
         
@@ -73,7 +71,6 @@ def sauvegarder_prediction(client_id, prediction, risque, insight):
 async def run_agent():
     logger.info("🤖 Démarrage de l'Agent IA AWB (via MCP)...")
     
-    # Paramètres pour lancer le serveur MCP en subprocess
     import sys
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -83,10 +80,8 @@ async def run_agent():
 
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
-            # Initialiser la session MCP
             await session.initialize()
             
-            # 1. Récupérer la liste des clients
             try:
                 conn = get_db_connection()
                 cursor = conn.cursor(dictionary=True)
@@ -103,7 +98,6 @@ async def run_agent():
             for client in clients:
                 cid = client['id']
                 try:
-                    # 2. Récupérer l'historique via MCP
                     result_profil = await session.call_tool("get_client_history", {"client_id": cid})
                     profil = result_profil.content[0].text
                     if isinstance(profil, str):
@@ -112,37 +106,31 @@ async def run_agent():
                         profil_dict = profil
                     profil_json = json.dumps(profil_dict)
 
-                    # 3. Prédire via MCP (XGBoost)
                     result_pred = await session.call_tool("predict_visite", {"profil_json": profil_json})
                     pred = result_pred.content[0].text
                     pred_dict = json.loads(pred) if isinstance(pred, str) else pred
                     prediction_json = json.dumps(pred_dict)
 
-                    # 4. Risque et Stratégie via MCP
                     result_risque = await session.call_tool("calculate_risk_and_strategy", {"profil_json": profil_json})
                     risque = result_risque.content[0].text
                     risque_dict = json.loads(risque) if isinstance(risque, str) else risque
                     risque_json = json.dumps(risque_dict)
 
-                    # 5. Insight via MCP (LLM)
                     result_insight = await session.call_tool("generate_insight", {
                         "profil_json": profil_json,
                         "prediction_json": prediction_json,
                         "risque_json": risque_json
                     })
                     insight = result_insight.content[0].text
-                    # ── EXTRACTION DE LA STRATÉGIE LLM ────────────────────────
                     if "Stratégie :" in insight:
                         try:
                             parts = insight.split("Stratégie :")
                             risque_dict["strategie_prescrite"] = parts[1].strip()
-                            # Nettoyer l'insight pour ne garder que la partie Santé
                             insight = parts[0].replace("Santé :", "").strip()
                             if insight.endswith("|"):
                                 insight = insight[:-1].strip()
                         except: pass
 
-                    # 6. Stocker directement dans la DB (pas via backend)
                     sauvegarder_prediction(cid, pred_dict, risque_dict, insight)
                     
                     logger.info(f"✅ Client {cid} traité | Score: {pred_dict.get('score_probabilite'):.1f}% | Stratégie: {risque_dict.get('strategie_prescrite')[:50]}...")

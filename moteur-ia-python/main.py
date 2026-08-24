@@ -15,9 +15,10 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Path, Body
 from fastapi.middleware.cors import CORSMiddleware
 from security import verify_token
 
+from agent_workflow import run_full_workflow
+
 load_dotenv()
 
-# ── Logging application ───────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [AWB-AI-SERVICE] %(message)s",
@@ -29,9 +30,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("awb.main")
 
-# ──────────────────────────────────────────────────────────────────────────
-#  LIFESPAN — Démarrage & arrêt automatique du Scheduler de prédictions
-# ──────────────────────────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -78,7 +76,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Configuration DB ─────────────────────────────────────────────────────────
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST",     "localhost"),
     "user":     os.getenv("DB_USER",     "root"),
@@ -89,7 +86,6 @@ DB_CONFIG = {
 
 from fastapi import BackgroundTasks
 
-# ── ENDPOINTS AGENTS IA ──────────────────────────────────────────────────────
 
 @app.post("/api/v1/ia/train")
 def trigger_training(background_tasks: BackgroundTasks):
@@ -132,7 +128,7 @@ def trigger_predictions(client_id: int = Query(None, description="ID client opti
 @app.post("/api/v1/ia/strategy")
 def trigger_strategies(client_id: int = Query(None, description="ID client optionnel"), force: bool = Query(False, description="Forcer le recalcul de tous les clients")):
     """
-    Agent 3 : Calcule les stratégies et GenAI insights pour les clients en attente.
+    Agent 3 (legacy) : Calcule les stratégies et GenAI insights pour les clients en attente.
     """
     from agent_strategie import analyser_strategie_pour_client, run_batch_strategies
     if client_id is not None:
@@ -148,6 +144,31 @@ def trigger_strategies(client_id: int = Query(None, description="ID client optio
         return {"status": "success", "strategies_ok": ok, "strategies_ko": ko}
 
 
+@app.post("/api/v1/ia/analyse")
+def trigger_analyse_langchain(
+    client_id: int = Query(..., description="ID client à analyser (obligatoire)"),
+):
+    """
+    Agent 3 LangChain — Pipeline complet d'analyse & recommandation churn.
+
+    Orchestre les 3 outils @tool via ReAct (LangChain + ChatGroq) :
+      1. get_client_data_tool   → Profil financier MySQL
+      2. predict_churn_tool    → Score XGBoost + explicabilité SHAP
+      3. apply_business_rules_tool → Services de rétention éligibles
+
+    Retourne une recommandation commerciale de 3 lignes pour le conseiller bancaire,
+    justifiée par le score de churn et les variables SHAP les plus impactantes.
+    """
+    from agent_analyse import run_agent_analyse
+    logger.info(f"🚀 [Agent 3 LangChain] Analyse client {client_id} — Pipeline ReAct démarré...")
+    try:
+        result = run_agent_analyse(client_id)
+        return {"status": "success", "client_id": client_id, "data": result}
+    except Exception as e:
+        logger.error(f"❌ [Agent 3 LangChain] Erreur client {client_id} : {e}")
+        raise HTTPException(status_code=500, detail=f"Erreur Agent 3 LangChain : {e}")
+
+
 @app.post("/api/v1/ia/run-batch")
 def trigger_full_batch():
     """
@@ -159,10 +180,8 @@ def trigger_full_batch():
     
     start_time = time.time()
     
-    # Phase 1 : Prédiction (Agent 2)
     p_ok, p_ko = run_batch_predictions()
     
-    # Phase 2 : Stratégie (Agent 3)
     s_ok, s_ko = run_batch_strategies(force_all=False)
     
     duration = round(time.time() - start_time, 2)
@@ -174,6 +193,34 @@ def trigger_full_batch():
         "predictions": {"ok": p_ok, "ko": p_ko},
         "strategies": {"ok": s_ok, "ko": s_ko}
     }
+
+
+@app.post("/api/v1/ia/workflow/{client_id}")
+def trigger_langgraph_workflow(client_id: int = Path(..., description="ID du client à traiter")):
+    """
+    Workflow LangGraph : Exécute le pipeline complet (Prédiction → Analyse → Stratégie) pour un client.
+    """
+    logger.info(f"🚀 Workflow LangGraph : Début traitement client {client_id}")
+    
+    try:
+        result = run_full_workflow(client_id)
+        
+        if result.get("erreur"):
+            logger.error(f"❌ Workflow LangGraph : Erreur client {client_id} → {result['erreur']}")
+            raise HTTPException(status_code=500, detail=result["erreur"])
+        
+        logger.info(f"✅ Workflow LangGraph : Traitement client {client_id} terminé avec succès")
+        return {
+            "status": "success",
+            "client_id": client_id,
+            "result": result
+        }
+        
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        logger.error(f"❌ Workflow LangGraph : Erreur inattendue client {client_id} → {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erreur inattendue : {str(e)}")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- CONFIGURATION DB ---
 DB_CONFIG = {
     "host":     os.getenv("DB_HOST",     "localhost"),
     "user":     os.getenv("DB_USER",     "root"),
@@ -22,7 +21,40 @@ DB_CONFIG = {
 def get_db_connection():
     return mysql.connector.connect(**DB_CONFIG)
 
-# --- CHARGEMENT DES MODÈLES ---
+import asyncio
+USE_MCP = os.getenv("AGENT2_USE_MCP", "1") != "0"
+
+CONTRACTION_VISITE = float(os.getenv("CONTRACTION_VISITE", "1.0"))
+
+_MCP_DIR = os.path.dirname(os.path.abspath(__file__))
+_MCP_SERVER_SCRIPT = os.path.join(_MCP_DIR, "mcp_ia_server.py")
+
+
+async def _call_mcp_tool_async(tool_name: str, args: dict) -> dict:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    server_params = StdioServerParameters(
+        command=sys.executable,
+        args=[_MCP_SERVER_SCRIPT],
+        env=os.environ.copy(),
+        cwd=_MCP_DIR,
+    )
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            result  = await session.call_tool(tool_name, args)
+            content = result.content[0].text if result.content else ""
+            return json.loads(content) if isinstance(content, str) else content
+
+
+def _call_mcp_tool(tool_name: str, args: dict) -> dict | None:
+    """Wrapper synchrone d'un appel d'outil MCP. Retourne None si échec."""
+    try:
+        return asyncio.run(_call_mcp_tool_async(tool_name, args))
+    except Exception as exc:
+        print(f"⚠️ [MCP] Appel '{tool_name}' échoué ({exc}). Fallback SQL direct.")
+        return None
+
 try:
     model_visite = joblib.load('xgboost_optimise.pkl')
     print("🧠 Modèle XGBoost (visite) chargé avec succès par l'Agent 2 !")
@@ -88,6 +120,33 @@ ALL_OP_TYPES = [
     "Versement Espèces", "Remise de Chèque", "Virement Reçu",
     "PLACEMENT", "RETRAIT_EPARGNE"
 ]
+
+# Canal d'un passage au guichet : seule source valable pour l'« opération
+# prévue » d'une visite. Aligné sur agent_entrainement.CANAL_AGENCE.
+CANAL_AGENCE = "AGENCE"
+OPERATION_AGENCE_DEFAUT = "Retrait Guichet"
+
+# Explicabilité de la prédiction. Le LLM n'est sollicité que pour les visites
+# imminentes : c'est là que le conseiller lit le texte. Au-delà, une phrase
+# factuelle générée par règles suffit — et évite 100 appels d'inférence par
+# nuit, que les quotas Groq ne supportent pas.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = "llama-3.1-8b-instant"
+HORIZON_EXPLICATION_JOURS = 7
+
+# Modèle « motif de la prochaine visite ». Chargé au démarrage ; en son absence
+# on retombe sur le mode d'agence du client, qui reste une réponse défendable
+# mais ne varie jamais d'une visite à l'autre.
+try:
+    from features_visite import construire_features as _features_visite
+    _modele_op_visite  = joblib.load("xgboost_operation_visite.pkl")
+    _encodeur_op_visite = joblib.load("encoder_operation_visite.pkl")
+    _colonnes_op_visite = joblib.load("operation_visite_features.pkl")
+    _meta_op_visite     = joblib.load("types_operation_visite.pkl")
+    print("🧠 Modèle 'motif de visite' chargé avec succès par l'Agent 2 !")
+except Exception as _exc:
+    _modele_op_visite = None
+    print(f"⚠️  Modèle 'motif de visite' indisponible ({_exc}) — repli sur le mode d'agence.")
 
 NEXT_FEATURE_COLS = [
     "seg_enc", "type_compte_enc", "nombre_operations", "montant_total",
@@ -168,10 +227,10 @@ def _features_calendrier_dt(value) -> dict:
     }
 
 def _est_jour_ouvrable(date: datetime.date) -> bool:
-    if date.weekday() == 5: return False          # Samedi : fermé
-    if date.weekday() == 6: return False          # Dimanche : fermé
-    if _est_jour_ferie_maroc(date): return False   # Férié : fermé
-    return True                                    # Lun–Ven : ouvert
+    if date.weekday() == 5: return False         
+    if date.weekday() == 6: return False          
+    if _est_jour_ferie_maroc(date): return False   
+    return True                                    
 
 def _next_jour_ouvre(date: datetime.date) -> datetime.date:
     while not _est_jour_ouvrable(date):
@@ -189,6 +248,12 @@ def _get_last_type_compte(client_id: int) -> str:
     except Exception: return "AUCUN"
 
 def _get_profil_client(client_id):
+    if USE_MCP:
+        profil_mcp = _call_mcp_tool("get_profil_visite", {"client_id": client_id})
+        if profil_mcp and not profil_mcp.get("error"):
+            return profil_mcp
+        print(f"⚠️ MCP indisponible pour client {client_id} — bascule SQL direct.")
+
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
@@ -308,11 +373,14 @@ def _predire_visite(profil, type_op_actuel, montant):
     if type_op_actuel in features: features[type_op_actuel] += 1
     df = pd.DataFrame([features], columns=COLONNES_VISITE)
 
-    raw_proba = float(model_visite.predict_proba(df)[0][1])
-    pred_label = int(model_visite.predict(df)[0])
+    if hasattr(model_visite, "predict_proba"):
+        raw_proba = float(model_visite.predict_proba(df)[0][1])
+    else:
+        raw_proba = float(model_visite.predict(df)[0])
+    pred_label = 1 if raw_proba >= 0.5 else 0
 
     raw_pct = raw_proba * 100.0
-    probabilite_finale = 50.0 + (raw_pct - 50.0) * 0.45
+    probabilite_finale = 50.0 + (raw_pct - 50.0) * CONTRACTION_VISITE
     ajustement = 0.0
     if profil:
         segment = str(profil.get('segment_metier', '')).upper()
@@ -345,9 +413,11 @@ def _predire_visite(profil, type_op_actuel, montant):
         if solde_total < 1000:
             ajustement -= 2.0
 
-    probabilite_finale = float(np.clip(probabilite_finale + ajustement, 12.0, 93.0))
+    probabilite_finale = float(np.clip(probabilite_finale + ajustement, 5.0, 93.0))
 
-    if probabilite_finale >= 75:
+    if probabilite_finale >= 80:
+        statut = "VISITE_QUASI_CERTAINE"
+    elif probabilite_finale >= 75:
         statut = "VISITE_PROBABLE"
     elif probabilite_finale >= 55:
         statut = "VISITE_INCERTAINE"
@@ -376,11 +446,11 @@ def _choisir_creneau(probabilite: float, date: datetime.date, profil: dict | Non
     idx = (int(probabilite * 10) + seed_client + date.day) % len(creneaux)
     return creneaux[idx]
 
-def _predire_date_visite(probabilite, base_datetime=None, profil=None):
+def _predire_date_visite(probabilite, base_datetime=None, profil=None, forcer_aujourdhui=False):
     today = _today_maroc()
     seed = int((probabilite % 1.0) * 100) if probabilite % 1.0 > 0 else int(probabilite)
 
-    if probabilite >= 62:
+    if forcer_aujourdhui or probabilite >= 62:
         if _est_jour_ouvrable(today):
             target_date = today
         else:
@@ -466,13 +536,19 @@ def _predire_next_datetime(profil, type_compte: str, montant: float, base_dateti
 
     return target_date.strftime("%Y-%m-%d"), f"{hour:02d}:{minute:02d}"
 
-def _doit_venir_aujourdhui(profil: dict, probabilite: float, niveau_risque: str = "FAIBLE") -> bool:
+def _doit_venir_aujourdhui(profil: dict, probabilite: float) -> bool:
+    """
+    Le client est-il attendu aujourd'hui ?
+
+    Décision fondée sur la seule propension de visite : le niveau de risque de
+    départ n'entre plus ici, l'Agent 2 ne le calcule plus. Faire dépendre une
+    date de visite du risque de churn mélangeait d'ailleurs deux questions
+    distinctes — quand le client vient, et s'il est en train de partir.
+    """
     today = _today_maroc()
     if not _est_jour_ouvrable(today):
         return False
     if probabilite >= 62.0:
-        return True
-    if probabilite >= 55.0 and niveau_risque in ("CRITIQUE", "ÉLEVÉ", "ALERTE"):
         return True
     if not profil:
         return False
@@ -489,20 +565,173 @@ def _predire_next_operation_future(profil, type_compte: str, montant: float):
     except: motif = str(pred_idx)
     return _format_operation_label(str(motif))
 
+def _stats_agence_client(client_id: int) -> dict:
+    """Fréquentation du guichet — matière première de l'explication."""
+    defauts = {"visites_90j": 0, "jours_depuis": None, "rythme": None}
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT COUNT(*),
+                   DATEDIFF(CURDATE(), MAX(date_heure_operation)),
+                   DATEDIFF(MAX(date_heure_operation), MIN(date_heure_operation))
+                     / NULLIF(COUNT(*) - 1, 0)
+            FROM historique_operation
+            WHERE client_id = %s AND canal = %s
+              AND date_heure_operation >= CURDATE() - INTERVAL 90 DAY
+        """, (client_id, CANAL_AGENCE))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if row and row[0]:
+            return {"visites_90j": int(row[0]),
+                    "jours_depuis": int(row[1]) if row[1] is not None else None,
+                    "rythme": float(row[2]) if row[2] is not None else None}
+    except Exception as exc:
+        print(f"⚠️ Stats agence client {client_id} : {exc}")
+    return defauts
+
+
+def _explication_factuelle(probabilite, operation, date_prevue, plage, stats) -> str:
+    """
+    Explication produite par règles, sans LLM.
+
+    Sert pour les visites lointaines, et de repli si l'appel au modèle échoue :
+    une phrase factuelle vaut mieux qu'un champ vide, et elle ne peut rien
+    inventer.
+    """
+    phrase = (f"Visite prévue le {date_prevue}"
+              + (f" sur la plage {plage}" if plage else "")
+              + f" pour un(e) {operation.lower()}, "
+              + f"avec une propension estimée à {probabilite:.0f} %.")
+    if stats["visites_90j"]:
+        phrase += f" Le client a effectué {stats['visites_90j']} passage(s) en agence sur 90 jours"
+        if stats["rythme"]:
+            phrase += f", soit un rythme d'environ {stats['rythme']:.0f} jours"
+        phrase += "."
+    if stats["jours_depuis"] is not None:
+        phrase += f" Dernier passage il y a {stats['jours_depuis']} jour(s)."
+    return phrase
+
+
+def _expliquer_prediction(client_id, profil, probabilite, operation,
+                          date_prevue, plage, jours_avant_visite) -> str:
+    """
+    Explique POURQUOI cette visite est prédite, à destination du conseiller.
+
+    Le LLM n'est appelé que si la visite est imminente et si les conditions
+    sont réunies ; sinon on renvoie l'explication factuelle. L'agent ne
+    transmet que des faits déjà calculés — il ne demande jamais au modèle
+    d'estimer une date ou une probabilité.
+    """
+    stats = _stats_agence_client(client_id)
+    factuelle = _explication_factuelle(probabilite, operation, date_prevue, plage, stats)
+
+    if not GROQ_API_KEY or jours_avant_visite is None or jours_avant_visite > HORIZON_EXPLICATION_JOURS:
+        return factuelle
+
+    try:
+        from langchain_groq import ChatGroq
+        from langchain_core.messages import SystemMessage, HumanMessage
+
+        consigne = (
+            "Tu expliques à un conseiller bancaire d'Attijariwafa Bank pourquoi le système "
+            "attend un client en agence. Deux phrases maximum, en français.\n\n"
+            "Tu n'utilises QUE les faits fournis. Tu n'inventes aucun chiffre, aucune date, "
+            "aucun motif absent du dossier. Tu n'annonces ni tarif ni offre commerciale : ton "
+            "rôle est d'expliquer une prévision, pas de vendre.\n"
+            "Tu écris directement l'explication, sans préambule ni rappel de ces consignes."
+        )
+        lignes = [
+            f"Segment : {profil.get('segment_metier', 'N/A')}",
+            f"Visite prévue : {date_prevue}" + (f", plage {plage}" if plage else ""),
+            f"Motif attendu au guichet : {operation}",
+            f"Propension de visite : {probabilite:.0f} %",
+            f"Passages en agence sur 90 jours : {stats['visites_90j']}"
+            + (f" (rythme ≈ {stats['rythme']:.0f} jours)" if stats["rythme"] else ""),
+        ]
+        if stats["jours_depuis"] is not None:
+            lignes.append(f"Dernier passage : il y a {stats['jours_depuis']} jour(s)")
+        contexte = "\n".join(lignes)
+        llm = ChatGroq(model=GROQ_MODEL, groq_api_key=GROQ_API_KEY,
+                       temperature=0.2, max_tokens=180, timeout=25, max_retries=2)
+        texte = llm.invoke([SystemMessage(content=consigne),
+                            HumanMessage(content=contexte)]).content.strip()
+        return texte or factuelle
+    except Exception as exc:
+        print(f"⚠️ Explication LLM indisponible pour le client {client_id} ({exc}) — repli factuel.")
+        return factuelle
+
+
+def _predire_motif_visite(client_id: int, date_visite) -> str:
+    """
+    Motif de la prochaine visite, par le modèle entraîné sur les séquences.
+
+    La date étant déjà prédite en amont, on l'utilise comme contexte : le jour
+    du mois porte les échéances de factures, le jour de semaine la cadence des
+    commerçants. Retourne None si le modèle est absent ou si le client n'a pas
+    assez d'historique en agence — l'appelant retombe alors sur son mode.
+    """
+    if _modele_op_visite is None or not date_visite:
+        return None
+    try:
+        if isinstance(date_visite, str):
+            date_visite = datetime.datetime.strptime(date_visite[:10], "%Y-%m-%d")
+        elif not isinstance(date_visite, datetime.datetime):
+            date_visite = datetime.datetime.combine(date_visite, datetime.time(12, 0))
+
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT h.date_heure_operation, h.type_operation, h.montant, cl.segment_metier "
+            "FROM historique_operation h JOIN client cl ON cl.id = h.client_id "
+            "WHERE h.client_id = %s AND h.canal = %s "
+            "ORDER BY h.date_heure_operation",
+            (client_id, CANAL_AGENCE))
+        lignes = cur.fetchall()
+        cur.close(); conn.close()
+        if not lignes:
+            return None
+
+        from collections import Counter
+        historique = [(d, t) for d, t, _m, _s in lignes]
+        compteurs = Counter(t for _d, t in historique)
+        try:
+            seg = int(_meta_op_visite["encoder_segment"].transform([lignes[-1][3] or "Particulier"])[0])
+        except (ValueError, KeyError):
+            seg = 0
+
+        f = _features_visite(seg, date_visite, historique, compteurs,
+                             _encodeur_op_visite, _meta_op_visite["types"])
+        if f is None:
+            return None
+        f["montant_precedent"] = float(lignes[-1][2] or 0)
+        X = pd.DataFrame([[f[c] for c in _colonnes_op_visite]], columns=_colonnes_op_visite)
+        motif = _encodeur_op_visite.inverse_transform([int(_modele_op_visite.predict(X)[0])])[0]
+        return _format_operation_label(str(motif)) or str(motif)
+    except Exception as exc:
+        print(f"⚠️ Erreur _predire_motif_visite client {client_id}: {exc}")
+        return None
+
+
 def _predire_next_operation_from_history(client_id: int, type_op: str, montant: float, base_dt: datetime.datetime) -> str:
     try:
         conn = get_db_connection()
         cursor = conn.cursor(dictionary=True)
+        # Restreint au canal AGENCE : on annonce au conseiller ce que le client
+        # vient faire AU GUICHET. Sans ce filtre, le mode ressortait à
+        # PAIEMENT_CARTE pour tout le portefeuille — une opération qui, par
+        # définition, ne se fait pas en agence.
         cursor.execute(
             """
             SELECT type_operation, COUNT(*) AS freq
             FROM historique_operation
             WHERE client_id = %s
+              AND canal = %s
             GROUP BY type_operation
             ORDER BY freq DESC
             LIMIT 1
             """,
-            (client_id,)
+            (client_id, CANAL_AGENCE)
         )
         row = cursor.fetchone()
         cursor.close()
@@ -511,16 +740,42 @@ def _predire_next_operation_from_history(client_id: int, type_op: str, montant: 
             return _format_operation_label(row["type_operation"]) or row["type_operation"]
     except Exception as e:
         print(f"⚠️ Erreur _predire_next_operation_from_history client {client_id}: {e}")
-    return _format_operation_label(type_op) or type_op or "Opération Bancaire"
+    # Client sans aucun passage au guichet : sa dernière opération ne peut pas
+    # servir de repli si elle s'est faite à distance.
+    if type_op == OPERATION_AGENCE_DEFAUT:
+        return _format_operation_label(type_op) or type_op
+    return _format_operation_label("Retrait Guichet") or "Retrait Guichet"
 
-def _sauvegarder_prediction_db(client_id, probabilite, operation_prevue, date_prevue, explication, plage_horaire, strategie="", niveau_risque="FAIBLE"):
+def _sauvegarder_prediction_db(client_id, probabilite, operation_prevue, date_prevue,
+                               explication, plage_horaire):
+    """
+    Enregistre la prédiction de visite et son explication.
+
+    N'écrit ni `niveau_risque` ni `score_churn` : ces colonnes appartiennent à
+    l'Agent 3. Les toucher ici écraserait son analyse à chaque batch, et deux
+    agents écrivant la même donnée finissent toujours par diverger.
+    """
     try:
         conn = get_db_connection(); cursor = conn.cursor()
         cursor.execute("SELECT id FROM prediction_visite WHERE client_id = %s", (client_id,))
         if cursor.fetchone():
-            cursor.execute("UPDATE prediction_visite SET score_probabilite_global=%s, operation_prevue=%s, date_prevue=%s, insight_genai=%s, plage_horaire_prevue=%s, strategie_prescrite=%s, niveau_risque=%s, date_dernier_calcul=NOW() WHERE client_id=%s", (probabilite, operation_prevue, date_prevue, explication, plage_horaire, strategie, niveau_risque, client_id))
+            cursor.execute(
+                "UPDATE prediction_visite "
+                "SET score_probabilite_global=%s, operation_prevue=%s, date_prevue=%s, "
+                "plage_horaire_prevue=%s, insight_genai=%s, date_dernier_calcul=NOW() "
+                "WHERE client_id=%s",
+                (probabilite, operation_prevue, date_prevue, plage_horaire, explication, client_id)
+            )
         else:
-            cursor.execute("INSERT INTO prediction_visite (client_id, score_probabilite_global, operation_prevue, date_prevue, insight_genai, plage_horaire_prevue, strategie_prescrite, niveau_risque, date_dernier_calcul) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())", (client_id, probabilite, operation_prevue, date_prevue, explication, plage_horaire, strategie, niveau_risque))
+            cursor.execute(
+                "INSERT INTO prediction_visite "
+                "(client_id, score_probabilite_global, operation_prevue, date_prevue, "
+                "insight_genai, plage_horaire_prevue, strategie_prescrite, date_dernier_calcul) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())",
+                (client_id, probabilite, operation_prevue, date_prevue,
+                 explication, plage_horaire, "")
+            )
+
         conn.commit(); cursor.close(); conn.close()
     except Exception as e: print(f"⚠️ Erreur sauvegarde DB : {e}")
 
@@ -571,67 +826,106 @@ def calculer_predictions_pour_client(client_id: int, type_op: str = "Profil Init
         if not date_p or not time_p:
             date_p, time_p = _predire_date_visite(probabilite, base_dt, profil=profil)
 
-    op_p = _predire_next_operation_from_history(client_id, type_op, montant, base_dt)
+    # Le modèle de séquence d'abord : il tient compte de la date visée et des
+    # démarches récentes du client. Le mode d'agence ne sert plus que de repli
+    # pour les clients trop peu vus au guichet — il renvoyait le même motif à
+    # chaque passage, ce qui n'est pas une prédiction.
+    op_p = _predire_motif_visite(client_id, date_p)
+    if not op_p or op_p in ("Opération Bancaire", "Profil Initial", ""):
+        op_p = _predire_next_operation_from_history(client_id, type_op, montant, base_dt)
     if not op_p or op_p in ("Opération Bancaire", "Profil Initial", ""):
         op_p = _predire_next_operation_future(profil, type_compte, montant)
 
     if not op_p or op_p in ("Opération Bancaire", "Profil Initial", ""):
         op_p = "Opération Bancaire"
 
-    # Calcul du niveau de risque basique pour décider s'il doit venir aujourd'hui
-    from analysis_engine import calculer_niveau_risque
-    solde_actuel  = profil.get("solde_actuel", 0.0)       if profil else 0.0
-    solde_moyen   = profil.get("solde_moyen_compte", 0.0) if profil else 0.0
-    nb_ops_30j    = profil.get("nb_operations_30j", 0)    if profil else 0
-    tot_ops       = profil.get("nombre_operations", 0)    if profil else 0
-    moy_retraits  = profil.get("moyenne_retraits_30j", 0.0) if profil else 0.0
+    # Le risque de départ n'est PAS calculé ici : c'est le métier de l'Agent 3,
+    # qui l'établit sur l'ensemble du portefeuille avant l'aiguillage du batch.
+    # L'Agent 2 s'en tient à la prédiction de visite et à son explication.
+    existing_date = None
+    existing_time = None
+    try:
+        conn = get_db_connection()
+        c = conn.cursor(dictionary=True)
+        c.execute("SELECT date_prevue, plage_horaire_prevue FROM prediction_visite WHERE client_id = %s", (client_id,))
+        row = c.fetchone()
+        c.close(); conn.close()
+        if row and row["date_prevue"]:
+            if isinstance(row["date_prevue"], str):
+                existing_date = datetime.datetime.strptime(row["date_prevue"][:10], "%Y-%m-%d").date()
+            elif isinstance(row["date_prevue"], datetime.datetime):
+                existing_date = row["date_prevue"].date()
+            else:
+                existing_date = row["date_prevue"]
+            existing_time = row.get("plage_horaire_prevue")
+    except Exception as e:
+        print(f"⚠️ Erreur lecture existing_date pour client {client_id}: {e}")
 
-    score_churn = 0.0
-    if solde_moyen > 1000:
-        ratio_solde = solde_actuel / solde_moyen
-        if ratio_solde < 0.4:   score_churn += 0.6
-        elif ratio_solde < 0.7: score_churn += 0.3
-    if solde_actuel > 0 and moy_retraits > (solde_actuel * 0.4):
-        score_churn += 0.4
-    if tot_ops > 20 and nb_ops_30j == 0:
-        score_churn += 0.5
-    score_churn = min(score_churn, 0.95)
-    niveau_risque = calculer_niveau_risque(score_churn)
+    today_date = _today_maroc()
+    last_op_date = base_dt.date() if isinstance(base_dt, datetime.datetime) else None
+    a_deja_visite = bool(existing_date and last_op_date and last_op_date >= existing_date)
 
-    if _doit_venir_aujourdhui(profil, probabilite, niveau_risque):
-        date_p, time_p = _predire_date_visite(probabilite, base_dt, profil=profil)
+    if existing_date and existing_time and existing_date >= today_date and not a_deja_visite and probabilite < 62.0:
+        # On conserve la date déjà annoncée au conseiller, mais sans jamais la
+        # rendre telle quelle : une date stockée par une version antérieure
+        # peut tomber un samedi, un dimanche ou un férié marocain. Les deux
+        # moteurs de date appliquent _next_jour_ouvre ; ce chemin de reprise
+        # était le seul à ne pas le faire, et laissait passer des visites
+        # prévues agence fermée.
+        date_retenue = existing_date if _est_jour_ouvrable(existing_date) else _next_jour_ouvre(existing_date)
+        date_p, time_p = date_retenue.strftime("%Y-%m-%d"), existing_time
+    else:
+        doit_venir_aujourdhui = _doit_venir_aujourdhui(profil, probabilite)
+        if existing_date and existing_date <= today_date and _est_jour_ouvrable(today_date) and not a_deja_visite:
+            doit_venir_aujourdhui = True
+        if doit_venir_aujourdhui:
+            date_p, time_p = _predire_date_visite(probabilite, base_dt, profil=profil, forcer_aujourdhui=True)
 
-    insight_attente = "Analyse IA en attente..."
-    strategie_attente = ""
+    # Explicabilité : l'Agent 2 justifie sa propre prédiction. Le LLM n'est
+    # sollicité que si la visite est proche ; sinon la phrase est produite par
+    # règles. Remplace le « Analyse IA en attente… » qui restait affiché pour
+    # tous les clients que l'Agent 3 ne traitait pas.
+    jours_avant = None
+    try:
+        jours_avant = (datetime.datetime.strptime(date_p[:10], "%Y-%m-%d").date() - today_date).days
+    except Exception:
+        pass
+
+    explication = _expliquer_prediction(
+        client_id, profil or {}, probabilite, op_p, date_p, time_p, jours_avant)
 
     _sauvegarder_prediction_db(
-        client_id, probabilite, op_p, date_p, 
-        insight_attente, time_p, strategie_attente, niveau_risque
-    )
-    
+        client_id, probabilite, op_p, date_p, explication, time_p)
+
     return {
         "client_id": client_id,
         "probabilite": probabilite,
         "operation_prevue": op_p,
         "date_prevue": date_p,
         "plage_horaire": time_p,
-        "niveau_risque": niveau_risque
+        "explication": explication,
     }
 
 def run_batch_predictions() -> tuple:
     print("🚀 [Agent 2] Début du calcul des prédictions (Batch)...")
     nb_ok = 0
     nb_ko = 0
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor(dictionary=True)
-        cursor.execute("SELECT id FROM client ORDER BY id")
-        clients = cursor.fetchall()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        print(f"❌ Erreur connexion DB : {e}")
-        return 0, 0
+    clients = None
+    if USE_MCP:
+        res = _call_mcp_tool("get_all_client_ids", {})
+        if res and not res.get("error") and "client_ids" in res:
+            clients = [{"id": cid} for cid in res["client_ids"]]
+    if clients is None:
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT id FROM client ORDER BY id")
+            clients = cursor.fetchall()
+            cursor.close()
+            conn.close()
+        except Exception as e:
+            print(f"❌ Erreur connexion DB : {e}")
+            return 0, 0
 
     for client in clients:
         cid = client["id"]

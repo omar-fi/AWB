@@ -10,6 +10,28 @@ const getDiagnosticText = (text) => {
   return beforeStrategy.replace(/^Sante\s*:|^Santé\s*:/i, '').trim();
 };
 
+/**
+ * Mécontentement du client, de 0 à 100 — plus le chiffre est haut, plus il
+ * faut agir. Distinct du risque de churn et pas son complément : le risque
+ * intègre la tension financière, or un client à découvert n'est pas mécontent
+ * de sa banque. Ce score ne mesure que le litige et le retrait relationnel,
+ * c'est-à-dire ce sur quoi le conseiller peut réellement agir.
+ */
+const pourcentageInsatisfaction = (prediction) => {
+  const brut = prediction?.scoreInsatisfaction ?? prediction?.score_insatisfaction;
+  if (brut === null || brut === undefined || Number.isNaN(Number(brut))) return null;
+  return Math.round(Number(brut));
+};
+
+/** Couleur du % d'insatisfaction sur la carte sombre. Haut = rouge. */
+const couleurInsatisfaction = (score) => {
+  if (score === null || score === undefined) return '#9CA3AF';
+  if (score >= 75) return '#E8391D';
+  if (score >= 50) return '#FF7A45';
+  if (score >= 25) return '#FFC000';
+  return '#52C41A';
+};
+
 export default function ClientDetailsModal({ isOpen, onClose, client }) {
   const { user, hasPermission } = useAuth();
   const [historique, setHistorique] = useState([]);
@@ -522,16 +544,27 @@ export default function ClientDetailsModal({ isOpen, onClose, client }) {
 
                     {/* STRATÉGIE PRESCRITE (Réservé au Portefeuilleur/Directeur ou autorisé) */}
                     {(client.prediction?.strategiePrescrite || client.prediction?.strategie_prescrite) && canAnalyzeClient && (
-                        <div className="p-6 rounded-3xl border relative overflow-hidden shadow-lg" style={{ background: 'linear-gradient(135deg, #1a0800, #120a00)', borderColor: '#E8391D40' }}>
+                        <div className="rounded-3xl border relative overflow-hidden shadow-lg" style={{ background: 'linear-gradient(135deg, #1a0800, #120a00)', borderColor: '#E8391D40' }}>
                             <div className="absolute top-0 left-0 w-1 h-full" style={{ background: '#E8391D' }}></div>
-                            <div className="absolute top-0 right-0 w-40 h-40 blur-[80px] opacity-10 pointer-events-none rounded-full" style={{ background: '#E8391D' }}></div>
-                            <h4 className="text-xs font-black uppercase tracking-widest mb-3 flex items-center gap-2" style={{ color: '#E8391D' }}>
-                                <Target size={14} /> Stratégie & Services Recommandés par l'Agent IA
-                            </h4>
-                            <p className="text-lg font-black text-white leading-snug relative z-10 italic">
-                                "{client.prediction.strategiePrescrite || client.prediction.strategie_prescrite}"
-                            </p>
-                            <p className="text-[10px] text-gray-500 mt-3 uppercase tracking-widest">Décision de l'Agent IA — Vue Portefeuilleur</p>
+                            <div className="p-5 relative z-10">
+                                <div className="flex items-start justify-between gap-4 mb-4">
+                                    <h4 className="text-xs font-black uppercase tracking-widest flex items-center gap-2" style={{ color: '#E8391D' }}>
+                                        <Target size={14} /> Stratégie & Services Recommandés par l'Agent IA
+                                    </h4>
+                                    {pourcentageInsatisfaction(client.prediction) !== null && (
+                                        <div className="text-right leading-none flex-shrink-0">
+                                            <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">Insatisfaction</p>
+                                            <p className="text-xl font-black" style={{ color: couleurInsatisfaction(pourcentageInsatisfaction(client.prediction)) }}>
+                                                {pourcentageInsatisfaction(client.prediction)}%
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                                <p className="text-sm text-gray-200 leading-relaxed whitespace-pre-line">
+                                    {(client.prediction.strategiePrescrite || client.prediction.strategie_prescrite || '').trim()}
+                                </p>
+                                <p className="mt-4 text-[10px] text-gray-600 uppercase tracking-widest">Décision de l'Agent IA — Vue Portefeuilleur</p>
+                            </div>
                         </div>
                     )}
 

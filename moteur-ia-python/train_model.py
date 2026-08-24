@@ -5,9 +5,7 @@ import joblib
 from sklearn.model_selection import train_test_split
 
 def entrainer_ia_awb():
-    # 1. Connexion et Récupération
     conn = mysql.connector.connect(host="localhost", user="root", password="", database="attijari_predict_db")
-    # Requête pour créer le dataset (Jointure entre compte, client et historique)
     query = """
         SELECT 
             c.solde, 
@@ -22,19 +20,15 @@ def entrainer_ia_awb():
     df = pd.read_sql(query, conn)
     conn.close()
 
-    # 2. Encodage des données textuelles (ex: segment_metier)
     df['segment_metier'] = pd.factorize(df['segment_metier'])[0]
 
-    # 3. Séparation X et y
     X = df.drop('target', axis=1)
     y = df['target']
 
-    # 4. Entraînement XGBoost
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
     model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=100)
     model.fit(X_train, y_train)
 
-    # 5. Sauvegarde du modèle
     joblib.dump(model, 'modele_xgboost_final.pkl')
     print("✅ Modèle XGBoost entraîné et sauvegardé !")
 

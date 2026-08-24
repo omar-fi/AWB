@@ -24,6 +24,9 @@ public class ActionController {
     @Autowired
     private ActionConseillerRepository actionRepository;
 
+    @Autowired
+    private com.digitalbank.predictbackend.service.FluxAgenceService fluxAgenceService;
+
     @PostMapping
     public ResponseEntity<ActionConseiller> enregistrerAction(@RequestBody ActionRequest request) {
         ActionConseiller action = dashboardService.enregistrerActionCommerciale(
@@ -82,5 +85,18 @@ public class ActionController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
         return ResponseEntity.ok(actionRepository.findAllByBanquierAgenceIdOrderByDateActionDesc(agenceId, PageRequest.of(page, size)));
+    }
+
+    // DIRECTEUR : services proposés sur la période (JOUR, SEMAINE, MOIS) et clients concernés
+    @GetMapping("/agence/{agenceId}/services")
+    public ResponseEntity<Map<String, Object>> getServicesProposes(
+            @PathVariable Long agenceId,
+            @RequestParam(defaultValue = "SEMAINE") String periode) {
+        return ResponseEntity.ok(fluxAgenceService.obtenirServicesProposes(agenceId, periode));
+    }
+
+    @GetMapping("/agence/{agenceId}/delegations")
+    public ResponseEntity<java.util.List<ActionConseiller>> getDelegations(@PathVariable Long agenceId) {
+        return ResponseEntity.ok(actionRepository.findDelegationsByAgence(agenceId));
     }
 }

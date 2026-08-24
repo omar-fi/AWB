@@ -24,22 +24,38 @@ public class DataInitializer {
     private static final Set<LocalDate> JOURS_FERIES_MAROC = new HashSet<>(Arrays.asList(
             LocalDate.of(2025, 1, 1), // Fête du nouvel an
             LocalDate.of(2025, 1, 11), // Proclamation de l'Indépendance
+            LocalDate.of(2025, 1, 13), // Nouvel an Amazigh
+            LocalDate.of(2025, 3, 30), // Eid al-Fitr (est.)
+            LocalDate.of(2025, 3, 31), // Eid al-Fitr (est.)
             LocalDate.of(2025, 5, 1), // Fête du Travail
+            LocalDate.of(2025, 6, 6), // Eid al-Adha (est.)
+            LocalDate.of(2025, 6, 7), // Eid al-Adha (est.)
+            LocalDate.of(2025, 6, 26), // Nouvel an Hijri (est.)
             LocalDate.of(2025, 7, 30), // Fête du Trône
             LocalDate.of(2025, 8, 14), // Allégeance Oued Ed-Dahab
             LocalDate.of(2025, 8, 20), // Révolution du Roi et du Peuple
             LocalDate.of(2025, 8, 21), // Fête de la Jeunesse
+            LocalDate.of(2025, 9, 4), // Fête du Mawlid (est.)
+            LocalDate.of(2025, 9, 5), // Fête du Mawlid (est.)
             LocalDate.of(2025, 11, 6), // Marche Verte
             LocalDate.of(2025, 11, 18), // Fête de l'Indépendance
-            LocalDate.of(2026, 1, 1),
-            LocalDate.of(2026, 1, 11),
-            LocalDate.of(2026, 5, 1),
-            LocalDate.of(2026, 7, 30),
-            LocalDate.of(2026, 8, 14),
-            LocalDate.of(2026, 8, 20),
-            LocalDate.of(2026, 8, 21),
-            LocalDate.of(2026, 11, 6),
-            LocalDate.of(2026, 11, 18)));
+            LocalDate.of(2026, 1, 1), // Fête du nouvel an
+            LocalDate.of(2026, 1, 11), // Proclamation de l'Indépendance
+            LocalDate.of(2026, 1, 13), // Nouvel an Amazigh
+            LocalDate.of(2026, 3, 20), // Eid al-Fitr (est.)
+            LocalDate.of(2026, 3, 21), // Eid al-Fitr (est.)
+            LocalDate.of(2026, 5, 1), // Fête du Travail
+            LocalDate.of(2026, 5, 27), // Eid al-Adha (est.) - Demain !
+            LocalDate.of(2026, 5, 28), // Eid al-Adha (est.)
+            LocalDate.of(2026, 6, 16), // Nouvel an Hijri (est.)
+            LocalDate.of(2026, 7, 30), // Fête du Trône
+            LocalDate.of(2026, 8, 14), // Allégeance Oued Ed-Dahab
+            LocalDate.of(2026, 8, 20), // Révolution du Roi et du Peuple
+            LocalDate.of(2026, 8, 21), // Fête de la Jeunesse
+            LocalDate.of(2026, 8, 25), // Fête du Mawlid (est.)
+            LocalDate.of(2026, 8, 26), // Fête du Mawlid (est.)
+            LocalDate.of(2026, 11, 6), // Marche Verte
+            LocalDate.of(2026, 11, 18))); // Fête de l'Indépendance
 
     /** Vérifie si une date est un jour ouvrable bancaire marocain */
     private boolean estJourOuvrable(LocalDate date) {
@@ -329,26 +345,28 @@ public class DataInitializer {
                 double score = calculerScore(historique, client.getSegmentMetier());
                 double scoreNormalise = score / 100.0; // Pour le champ scoreChurn [0-1]
 
-                client.setScoreChurn(scoreNormalise);
-
-                // ─── Niveau de Risque déterministe basé sur l'inactivité et le déséquilibre
-                // ───
-                // Score >= 93 : Inactivité prolongée + déséquilibre débit élevé
-                // Score 88-93 : Tension modérée sur le compte
-                // Score < 88 : Actif, sous surveillance préventive
-                client.setNiveauRisque(
-                        score >= 93 ? "CRITIQUE" : (score >= 88 ? "ALERTE" : "SOUS SURVEILLANCE"));
-                updated = true;
+                // Le niveau de risque et le score de churn ne sont PLUS calculés ici.
+                // Une seule source fait foi : l'agent IA Python (calculer_churn_xgboost),
+                // qui les dérive de règles métier sur les données réelles.
+                // Le calcul qui existait ici dérivait le risque du score de VISITE —
+                // deux grandeurs différentes — et contredisait l'agent : la table client
+                // annonçait 74 CRITIQUE là où prediction_visite en comptait 0.
 
                 if (updated)
                     clientRepository.save(client);
 
                 // ── Prédiction ProjetoVisite basée sur l'historique ──────────────
+                // AMORÇAGE UNIQUEMENT : on ne sème que les clients sans prédiction.
+                // Une prédiction existante appartient à l'agent IA Python (batch
+                // nocturne) ; la réécrire à chaque démarrage écrasait ses dates —
+                // et comme calculerDatePrevue() ne renvoie jamais aujourd'hui,
+                // « Clients attendus » se vidait à chaque redémarrage.
                 PredictionVisite p = client.getPrediction();
-                if (p == null) {
-                    p = new PredictionVisite();
-                    p.setClient(client);
+                if (p != null) {
+                    return;
                 }
+                p = new PredictionVisite();
+                p.setClient(client);
 
                 // Opération prévue d'après le type dominant dans l'historique
                 String operation = determinerOperation(historique, client.getSegmentMetier());

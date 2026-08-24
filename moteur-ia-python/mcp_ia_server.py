@@ -22,14 +22,12 @@ DB_CONFIG = {
     "database": os.getenv("DB_NAME",     "attijari_predict_db"),
 }
 
-# --- CHARGEMENT DES MODÈLES ---
 try:
     model_visite = joblib.load('xgboost_optimise.pkl')
     model_operation  = joblib.load('xgboost_model.pkl')
     encoder_segment  = joblib.load('encoder_segment.pkl')
     encoder_motif    = joblib.load('encoder_motif.pkl')
     
-    # Modèles Next Event
     model_next_date = joblib.load('xgboost_next_date.pkl')
     model_next_time = joblib.load('xgboost_next_time.pkl')
     model_next_operation = joblib.load('xgboost_next_operation.pkl')
@@ -129,13 +127,12 @@ def _features_calendrier_dt(value) -> Dict[str, Any]:
         "jours_depuis_derniere_operation": max(0, (datetime.datetime.now() - dt).total_seconds() / 86400.0),
     }
 
-# --- HELPERS HORAIRES BANCAIRES AWB ---
 
 def _est_jour_ouvrable(date: datetime.date) -> bool:
-    if date.weekday() == 5: return False          # Samedi : fermé
-    if date.weekday() == 6: return False          # Dimanche : fermé
-    if date in _FERIES_MAROC: return False        # Férié : fermé
-    return True                                   # Lun–Ven : ouvert
+    if date.weekday() == 5: return False
+    if date.weekday() == 6: return False
+    if date in _FERIES_MAROC: return False
+    return True
 
 def _next_jour_ouvre(date: datetime.date) -> datetime.date:
     while not _est_jour_ouvrable(date):
@@ -159,7 +156,6 @@ def _fenetre_calendaire():
 def get_db_connection():
     return mysql.connector.connect(**DB_CONFIG)
 
-# --- TOOLS MCP ---
 
 @mcp.tool()
 def get_client_history(client_id: int) -> Dict[str, Any]:
@@ -280,7 +276,6 @@ def predict_visite(profil_json: str) -> Dict[str, Any]:
     except:
         return {"error": "Invalid profile JSON"}
 
-    # ── 1. Prédiction Probabilité (Classification) ──
     features = {col: 0 for col in COLONNES_VISITE}
     features['nombre_operations'] = profil.get('nombre_operations', 1)
     features['montant_total'] = profil.get('montant_total', 0)
@@ -299,11 +294,14 @@ def predict_visite(profil_json: str) -> Dict[str, Any]:
         if op in profil: features[op] = profil[op]
 
     df = pd.DataFrame([features], columns=COLONNES_VISITE)
-    raw_proba = float(model_visite.predict_proba(df)[0][1])
+    if hasattr(model_visite, "predict_proba"):
+        raw_proba = float(model_visite.predict_proba(df)[0][1])
+    else:
+        raw_proba = float(model_visite.predict(df)[0])
     raw_pct = raw_proba * 100.0
-    probabilite_finale = round(float(np.clip(50.0 + (raw_pct - 50.0) * 0.45, 12.0, 93.0)), 1)
+    _contraction = float(os.getenv("CONTRACTION_VISITE", "1.0"))
+    probabilite_finale = round(float(np.clip(50.0 + (raw_pct - 50.0) * _contraction, 5.0, 93.0)), 1)
 
-    # ── 2. Prédictions Next Event (Date, Heure, Opération) ──
     op_future = "Opération Bancaire"
     try:
         segment = str(profil.get('segment_metier', 'PARTICULIER')).upper()
@@ -347,13 +345,11 @@ def predict_visite(profil_json: str) -> Dict[str, Any]:
             
         df_next = pd.DataFrame([[features_next.get(c, 0) for c in NEXT_FEATURE_COLS]], columns=NEXT_FEATURE_COLS)
 
-        # Prédiction Opération
         if 'model_next_operation' in globals():
             op_enc = model_next_operation.predict(df_next)[0]
             op_future_raw = encoder_next_operation.inverse_transform([op_enc])[0]
             op_future = OPERATION_LABELS.get(op_future_raw.upper(), op_future_raw)
 
-        # Prédiction Date (Delta jours)
         today = datetime.date.today()
         if probabilite_finale >= 88 and _est_jour_ouvrable(today):
             target_date = today
@@ -365,15 +361,12 @@ def predict_visite(profil_json: str) -> Dict[str, Any]:
             min_date, _ = _fenetre_calendaire()
             target_date = min_date
 
-        # Prédiction Heure
         if 'model_next_time' in globals():
             hour_float = model_next_time.predict(df_next)[0]
-            # Horaire agences : 8h à 16h (lundi-vendredi)
             h = max(8, min(16, int(round(hour_float))))
         else:
             h = 10
 
-        # Décale le créneau de façon déterministe par client pour éviter les heures identiques.
         h = min(16, max(8, h + ((int(profil.get("client_id", 0) or 0) + target_date.day) % 3) - 1))
     except Exception as e:
         print(f"Erreur lors de la prédiction next_event : {e}")
@@ -497,6 +490,291 @@ def generate_insight(profil_json: str, prediction_json: str, risque_json: str) -
         return result.content.strip()
     except Exception as e:
         return f"Stratégie de l'Agent : Suivi personnalisé recommandé (Erreur IA: {str(e)})"
+
+@mcp.tool()
+def get_client_data(client_id: int) -> Dict[str, Any]:
+    """
+    Récupère le profil financier complet d'un client au format attendu par l'Agent 3
+    (analyse churn). C'est le point d'accès UNIQUE aux données client pour l'Agent 3 :
+    profil de base, statistiques opérationnelles, inactivité et 5 dernières transactions.
+
+    Args:
+        client_id: Identifiant numérique unique du client.
+
+    Returns:
+        Dict avec le profil complet, ou {"error": "..."} en cas d'échec.
+    """
+    import json
+    try:
+        conn   = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        cursor.execute("""
+            SELECT
+                c.id                                          AS client_id,
+                c.segment_metier,
+                COALESCE(SUM(co.solde), 0)                   AS solde_actuel,
+                COALESCE(AVG(co.solde), 0)                   AS solde_moyen_compte,
+                MAX(CASE WHEN co.type_compte='EPARGNE' THEN 1 ELSE 0 END) AS has_compte_epargne,
+                COUNT(co.id)                                  AS nb_comptes,
+                SUM(CASE WHEN co.type_compte='COURANT' THEN 1 ELSE 0 END) AS nb_comptes_courant,
+                SUM(CASE WHEN co.type_compte='EPARGNE' THEN 1 ELSE 0 END) AS nb_comptes_epargne,
+                SUM(CASE WHEN co.type_compte='CREDIT'  THEN 1 ELSE 0 END) AS nb_comptes_credit
+            FROM client c
+            LEFT JOIN compte co ON c.id = co.client_id
+            WHERE c.id = %s
+            GROUP BY c.id, c.segment_metier
+        """, (client_id,))
+        base = cursor.fetchone()
+
+        if not base:
+            cursor.close(); conn.close()
+            return {"error": f"Client {client_id} introuvable en base."}
+
+        cursor.execute("""
+            SELECT
+                COUNT(*)                                                   AS nb_operations,
+                COALESCE(SUM(montant), 0)                                  AS montant_total,
+                COALESCE(AVG(montant), 0)                                  AS montant_moyen,
+                COALESCE(AVG(CASE WHEN type_operation='RETRAIT' THEN montant END), 0) AS moy_retrait,
+                MAX(date_heure_operation)                                  AS derniere_operation_at
+            FROM historique_operation
+            WHERE client_id = %s
+        """, (client_id,))
+        ops = cursor.fetchone()
+
+        cursor.execute("""
+            SELECT COUNT(*) AS nb_ops_30j
+            FROM historique_operation
+            WHERE client_id = %s
+              AND date_heure_operation >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+        """, (client_id,))
+        ops_30j = cursor.fetchone()
+
+        cursor.execute("""
+            SELECT type_operation, montant, DATE(date_heure_operation) AS date_op
+            FROM historique_operation
+            WHERE client_id = %s
+            ORDER BY date_heure_operation DESC
+            LIMIT 5
+        """, (client_id,))
+        dernieres_ops = cursor.fetchall()
+
+        cursor.close()
+        conn.close()
+
+        derniere_op_str = (
+            str(ops["derniere_operation_at"]) if ops and ops.get("derniere_operation_at") else "N/A"
+        )
+        jours_inactif = 0
+        if ops and ops.get("derniere_operation_at"):
+            delta = datetime.datetime.now() - ops["derniere_operation_at"]
+            jours_inactif = max(0, int(delta.total_seconds() / 86400))
+
+        profil = {
+            "client_id":          int(client_id),
+            "segment_metier":     base.get("segment_metier", "PARTICULIER"),
+            "solde_actuel":       round(float(base.get("solde_actuel") or 0), 2),
+            "solde_moyen_compte": round(float(base.get("solde_moyen_compte") or 0), 2),
+            "has_compte_epargne": int(base.get("has_compte_epargne") or 0),
+            "nb_comptes":         int(base.get("nb_comptes") or 0),
+            "nb_comptes_courant": int(base.get("nb_comptes_courant") or 0),
+            "nb_comptes_epargne": int(base.get("nb_comptes_epargne") or 0),
+            "nb_comptes_credit":  int(base.get("nb_comptes_credit") or 0),
+            "nb_operations_total":int(ops.get("nb_operations") or 0) if ops else 0,
+            "nb_operations_30j":  int(ops_30j.get("nb_ops_30j") or 0) if ops_30j else 0,
+            "montant_moyen":      round(float(ops.get("montant_moyen") or 0), 2) if ops else 0.0,
+            "montant_total":      round(float(ops.get("montant_total") or 0), 2) if ops else 0.0,
+            "moy_retrait":        round(float(ops.get("moy_retrait") or 0), 2) if ops else 0.0,
+            "jours_depuis_derniere_op": jours_inactif,
+            "derniere_operation_at":    derniere_op_str,
+            "historique_recent": [
+                {
+                    "type":   str(r.get("type_operation", "")),
+                    "montant": round(float(r.get("montant") or 0), 2),
+                    "date":   str(r.get("date_op", "")),
+                }
+                for r in (dernieres_ops or [])
+            ],
+            "_source": "MCP",
+        }
+        return profil
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_all_client_ids() -> Dict[str, Any]:
+    """
+    Retourne la liste de tous les identifiants clients (pour les batchs Agent 1 / Agent 2).
+
+    Returns:
+        Dict {"client_ids": [int, ...]} ou {"error": "..."}.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM client ORDER BY id")
+        ids = [int(r[0]) for r in cursor.fetchall()]
+        cursor.close(); conn.close()
+        return {"client_ids": ids}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_profil_visite(client_id: int) -> Dict[str, Any]:
+    """
+    Récupère le profil client au schéma EXACT attendu par l'Agent 2 (prédiction de visite) :
+    profil de base, statistiques opérationnelles, signaux calendrier/agence et ratios.
+
+    Args:
+        client_id: Identifiant numérique unique du client.
+
+    Returns:
+        Dict avec le profil complet, ou {"error": "..."}.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT c.segment_metier,
+                   COALESCE(SUM(co.solde), 0) AS solde_actuel,
+                   MAX(CASE WHEN co.type_compte = 'EPARGNE' THEN 1 ELSE 0 END) AS has_epargne,
+                   AVG(co.solde) AS solde_moyen_compte,
+                   COUNT(co.id) AS nb_comptes,
+                   SUM(CASE WHEN co.type_compte = 'COURANT' THEN 1 ELSE 0 END) AS nb_comptes_courant,
+                   SUM(CASE WHEN co.type_compte = 'EPARGNE' THEN 1 ELSE 0 END) AS nb_comptes_epargne,
+                   SUM(CASE WHEN co.type_compte = 'CREDIT' THEN 1 ELSE 0 END) AS nb_comptes_credit
+            FROM client c
+            LEFT JOIN compte co ON c.id = co.client_id
+            WHERE c.id = %s
+            GROUP BY c.segment_metier
+        """, (client_id,))
+        base = cursor.fetchone()
+        cursor.execute("""
+            SELECT COUNT(*) AS nb_ops,
+                   COALESCE(AVG(CASE WHEN type_operation='RETRAIT' THEN montant END), 0) AS moy_retrait,
+                   COALESCE(AVG(HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60), 12) AS heure_moyenne_operation,
+                   SUM(CASE WHEN DAYOFWEEK(date_heure_operation) IN (1, 7) THEN 1 ELSE 0 END) AS nb_ops_weekend,
+                   SUM(CASE WHEN DAYOFWEEK(date_heure_operation) = 7 THEN 1 ELSE 0 END) AS nb_ops_samedi,
+                   SUM(CASE WHEN DAYOFWEEK(date_heure_operation) = 1 THEN 1 ELSE 0 END) AS nb_ops_dimanche,
+                   SUM(CASE
+                       WHEN DAYOFWEEK(date_heure_operation) = 7
+                             AND (HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60) BETWEEN 8 AND 13
+                       THEN 0
+                       WHEN DAYOFWEEK(date_heure_operation) BETWEEN 2 AND 6
+                             AND (HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60) BETWEEN 8 AND 16.5
+                       THEN 0
+                       ELSE 1
+                   END) AS nb_ops_hors_horaires,
+                   SUM(CASE WHEN (HOUR(date_heure_operation) + MINUTE(date_heure_operation) / 60) BETWEEN 11 AND 14 THEN 1 ELSE 0 END) AS nb_ops_heure_pointe,
+                   MAX(date_heure_operation) AS derniere_operation_at
+            FROM historique_operation
+            WHERE client_id = %s
+        """, (client_id,))
+        hist = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) AS nb_ops_30j FROM historique_operation WHERE client_id = %s AND date_heure_operation >= DATE_SUB(NOW(), INTERVAL 30 DAY)", (client_id,))
+        hist_30j = cursor.fetchone()
+        cursor.execute("SELECT DATE(date_heure_operation) AS d FROM historique_operation WHERE client_id = %s", (client_id,))
+        dates_rows = cursor.fetchall()
+        cursor.execute("SELECT COUNT(*) AS nombre_operations, COALESCE(SUM(montant), 0) AS montant_total, COALESCE(AVG(montant), 0) AS montant_moyen, type_operation FROM historique_operation WHERE client_id = %s GROUP BY type_operation", (client_id,))
+        ops_rows = cursor.fetchall()
+        cursor.close(); conn.close()
+
+        nb_ops_total_hist = int(hist["nb_ops"]) if hist else 0
+        nb_ops_ferie = sum(1 for r in dates_rows if r.get("d") and r["d"] in _FERIES_MAROC)
+        derniere_feats = _features_calendrier_dt(
+            str(hist.get("derniere_operation_at")) if hist and hist.get("derniere_operation_at") else None
+        )
+        profil = {
+            "client_id": int(client_id),
+            "segment_metier": base["segment_metier"] if base else "PARTICULIER",
+            "solde_actuel": float(base["solde_actuel"]) if base else 0.0,
+            "has_compte_epargne": int(base["has_epargne"]) if base else 0,
+            "solde_moyen_compte": float(base["solde_moyen_compte"]) if base and base["solde_moyen_compte"] else 0.0,
+            "nb_comptes": int(base["nb_comptes"] or 0) if base else 0,
+            "nb_comptes_courant": int(base["nb_comptes_courant"] or 0) if base else 0,
+            "nb_comptes_epargne": int(base["nb_comptes_epargne"] or 0) if base else 0,
+            "nb_comptes_credit": int(base["nb_comptes_credit"] or 0) if base else 0,
+            "nb_operations_30j": int(hist_30j["nb_ops_30j"]) if hist_30j else 0,
+            "moyenne_retraits_30j": float(hist["moy_retrait"]) if hist else 0.0,
+            "nb_ops_weekend": int(hist["nb_ops_weekend"] or 0) if hist else 0,
+            "nb_ops_samedi": int(hist["nb_ops_samedi"] or 0) if hist else 0,
+            "nb_ops_dimanche": int(hist["nb_ops_dimanche"] or 0) if hist else 0,
+            "nb_ops_ferie": nb_ops_ferie,
+            "nb_ops_hors_horaires": int(hist["nb_ops_hors_horaires"] or 0) if hist else 0,
+            "nb_ops_heure_pointe": int(hist["nb_ops_heure_pointe"] or 0) if hist else 0,
+            "heure_moyenne_operation": float(hist["heure_moyenne_operation"] or 12.0) if hist else 12.0,
+        }
+        profil.update(derniere_feats)
+        total_ops = sum(r["nombre_operations"] for r in ops_rows)
+        profil["nombre_operations"] = total_ops
+        profil["montant_total"] = sum(float(r["montant_total"]) for r in ops_rows)
+        profil["montant_moyen"] = profil["montant_total"] / total_ops if total_ops > 0 else 0.0
+        denom = max(1, nb_ops_total_hist)
+        profil["ratio_ops_weekend"] = profil["nb_ops_weekend"] / denom
+        profil["ratio_ops_ferie"] = profil["nb_ops_ferie"] / denom
+        profil["ratio_ops_hors_horaires"] = profil["nb_ops_hors_horaires"] / denom
+        for row in ops_rows:
+            profil[row["type_operation"]] = int(row["nombre_operations"])
+        return profil
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool()
+def get_training_data() -> Dict[str, Any]:
+    """
+    Fournit le dataset brut d'entraînement à l'Agent 1 : toutes les opérations
+    (historique_operation) + les agrégats par client (solde, comptes, segment).
+
+    Returns:
+        Dict {"operations": [...], "clients": [...]} (dates sérialisées en str),
+        ou {"error": "..."}.
+    """
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT * FROM historique_operation")
+        operations = cursor.fetchall()
+        cursor.execute("""
+            SELECT
+                cl.id                                                        AS client_id,
+                cl.segment_metier,
+                COALESCE(SUM(co.solde), 0)                                   AS solde_total,
+                MAX(CASE WHEN co.type_compte = 'EPARGNE' THEN 1 ELSE 0 END) AS has_compte_epargne,
+                AVG(co.solde)                                                AS solde_moyen_compte,
+                COUNT(co.id)                                                 AS nb_comptes,
+                SUM(CASE WHEN co.type_compte = 'COURANT' THEN 1 ELSE 0 END)  AS nb_comptes_courant,
+                SUM(CASE WHEN co.type_compte = 'EPARGNE' THEN 1 ELSE 0 END)  AS nb_comptes_epargne,
+                SUM(CASE WHEN co.type_compte = 'CREDIT' THEN 1 ELSE 0 END)   AS nb_comptes_credit
+            FROM client cl
+            LEFT JOIN compte co ON cl.id = co.client_id
+            GROUP BY cl.id, cl.segment_metier
+        """)
+        clients = cursor.fetchall()
+        cursor.close(); conn.close()
+
+        from decimal import Decimal
+        def _clean(rows):
+            out = []
+            for r in rows:
+                d = {}
+                for k, v in r.items():
+                    if isinstance(v, (datetime.datetime, datetime.date)):
+                        d[k] = str(v)
+                    elif isinstance(v, Decimal):
+                        d[k] = float(v)
+                    else:
+                        d[k] = v
+                out.append(d)
+            return out
+
+        return {"operations": _clean(operations), "clients": _clean(clients)}
+    except Exception as e:
+        return {"error": str(e)}
+
 
 if __name__ == "__main__":
     mcp.run()

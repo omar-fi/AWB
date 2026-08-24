@@ -19,7 +19,22 @@ public interface ClientRepository extends JpaRepository<Client, Long> {
 
     Optional<Client> findByCin(String cin);
     
-    @Query(value = "SELECT DISTINCT c FROM Client c LEFT JOIN FETCH c.comptes LEFT JOIN FETCH c.prediction WHERE c.agence.id = :agenceId",
+    /**
+     * Portefeuille d'une agence, les clients les plus mécontents en premier.
+     *
+     * Le tri doit être fait ici et non dans le navigateur : la page ne contient
+     * que 10 clients sur 100, un tri côté front ne réordonnerait donc que la
+     * page affichée et laisserait un client à 90 % d'insatisfaction en page 7.
+     *
+     * NULLS LAST : un client sans score évalué part en fin de liste. Ne pas
+     * savoir n'est pas la même chose qu'aller bien, et le traiter comme
+     * satisfait le rendrait invisible.
+     */
+    @Query(value = "SELECT DISTINCT c FROM Client c "
+                 + "LEFT JOIN FETCH c.comptes LEFT JOIN FETCH c.prediction p "
+                 + "WHERE c.agence.id = :agenceId "
+                 + "ORDER BY CASE WHEN p.scoreInsatisfaction IS NULL THEN 1 ELSE 0 END, "
+                 + "p.scoreInsatisfaction DESC",
            countQuery = "SELECT COUNT(c) FROM Client c WHERE c.agence.id = :agenceId")
     Page<Client> findByAgenceId(@Param("agenceId") Long agenceId, Pageable pageable);
     

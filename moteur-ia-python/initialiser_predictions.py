@@ -7,7 +7,6 @@ try:
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
-    # Récupérer tous les clients de la base
     cursor.execute("SELECT id FROM client")
     clients = cursor.fetchall()
     conn.close()
@@ -19,10 +18,8 @@ try:
         cid = client['id']
         print(f"\n⏳ [{index + 1}/{total}] Traitement du client ID: {cid}")
         
-        # Le modèle va analyser l'historique de chaque client et générer la prévision
         recalculer_prediction(cid, action="INITIALISATION", type_op="", montant=0.0)
         
-        # Pause légère pour ne pas saturer l'API
         time.sleep(1.5)
 
     print("\n✅ Tâche terminée ! Tous les clients ont maintenant une prédiction d'IA.")

@@ -21,15 +21,18 @@ public class PredictionVisiteController {
     private final ClientRepository clientRepository;
     private final EmailService emailService;
     private final com.digitalbank.predictbackend.service.BatchIaService batchIaService;
+    private final com.digitalbank.predictbackend.service.FluxAgenceService fluxAgenceService;
 
     public PredictionVisiteController(PredictionVisiteRepository predictionRepository,
                                       ClientRepository clientRepository,
                                       EmailService emailService,
-                                      com.digitalbank.predictbackend.service.BatchIaService batchIaService) {
+                                      com.digitalbank.predictbackend.service.BatchIaService batchIaService,
+                                      com.digitalbank.predictbackend.service.FluxAgenceService fluxAgenceService) {
         this.predictionRepository = predictionRepository;
         this.clientRepository     = clientRepository;
         this.emailService         = emailService;
         this.batchIaService      = batchIaService;
+        this.fluxAgenceService    = fluxAgenceService;
     }
 
     @GetMapping("/client/{clientId}")
@@ -64,10 +67,6 @@ public class PredictionVisiteController {
     public ResponseEntity<List<PredictionVisite>> getPredictionsDuJour(@PathVariable Long agenceId) {
         LocalDate aujourdhui = LocalDate.now();
         List<PredictionVisite> opportunites = predictionRepository.findPredictionsDuJourByAgence(agenceId, aujourdhui);
-
-        if (opportunites.isEmpty()) {
-            return ResponseEntity.noContent().build();
-        }
         return ResponseEntity.ok(opportunites);
     }
 
@@ -76,10 +75,6 @@ public class PredictionVisiteController {
     public ResponseEntity<List<PredictionVisite>> getOpportunitesDirect(@RequestParam Long agenceId) {
         LocalDate aujourdhui = LocalDate.now();
         List<PredictionVisite> opportunites = predictionRepository.findHighProbabilityPredictionsDuJourByAgence(agenceId, aujourdhui);
-        
-        if (opportunites.isEmpty()) {
-            return ResponseEntity.noContent().build();
-        }
         return ResponseEntity.ok(opportunites);
     }
 
@@ -87,10 +82,15 @@ public class PredictionVisiteController {
     @GetMapping("/agence/{agenceId}")
     public ResponseEntity<List<PredictionVisite>> getAllPredictionsByAgence(@PathVariable Long agenceId) {
         List<PredictionVisite> predictions = predictionRepository.findAllByAgenceId(agenceId);
-        if (predictions.isEmpty()) {
-            return ResponseEntity.noContent().build();
-        }
         return ResponseEntity.ok(predictions);
+    }
+
+    // DIRECTEUR : flux d'affluence jour par jour — combien de clients, qui, et pourquoi
+    @GetMapping("/agence/{agenceId}/flux")
+    public ResponseEntity<java.util.Map<String, Object>> getFluxAgence(
+            @PathVariable Long agenceId,
+            @RequestParam(defaultValue = "7") int jours) {
+        return ResponseEntity.ok(fluxAgenceService.obtenirFluxAttendu(agenceId, jours));
     }
 
     @PostMapping("/batch-refresh")

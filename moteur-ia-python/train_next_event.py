@@ -24,10 +24,9 @@ DB_NAME = os.getenv("DB_NAME", "attijari_predict_db")
 
 ENGINE_URL = f"mysql+pymysql://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}"
 
-# Fichiers de sortie
-NEXT_DATE_MODEL_FILE = "xgboost_next_date.pkl"      # Prédit delta_jours (Reg)
-NEXT_TIME_MODEL_FILE = "xgboost_next_time.pkl"      # Prédit l'heure (Reg)
-NEXT_OP_MODEL_FILE = "xgboost_next_operation.pkl"   # Prédit le type d'op (Classif)
+NEXT_DATE_MODEL_FILE = "xgboost_next_date.pkl"
+NEXT_TIME_MODEL_FILE = "xgboost_next_time.pkl"
+NEXT_OP_MODEL_FILE = "xgboost_next_operation.pkl"
 
 ENCODER_SEGMENT_NEXT_FILE = "encoder_segment_next.pkl"
 ENCODER_TYPE_COMPTE_FILE = "encoder_type_compte.pkl"
@@ -147,9 +146,7 @@ def train_next_event():
             diff = nxt["date_heure_operation"] - current["date_heure_operation"]
             d_days = diff.total_seconds() / (24 * 3600)
             
-            # On ne garde que les données dans la plage d'intérêt pour X_rows
             if i < start_i:
-                # Update counters but don't append to X_rows yet
                 nb_ops += 1
                 total_m += float(current["montant"] or 0)
                 if str(current["type_operation"]) in counts: counts[str(current["type_operation"])] += 1
@@ -163,7 +160,6 @@ def train_next_event():
 
             type_compte_enc = int(enc_type_compte.transform([str(current["type_compte"])])[0])
             
-            # Features
             feat = {
                 "seg_enc": seg_enc, "type_compte_enc": type_compte_enc,
                 "nombre_operations": nb_ops, "montant_total": total_m,
@@ -172,9 +168,8 @@ def train_next_event():
                 "solde_total": float(profile.get("solde_actuel", 0)),
                 "solde_moyen_compte": float(profile.get("solde_moyen_compte", 0)),
             }
-            # Moyenne retrait 30j simplifié pour l'exemple d'entraînement (approximation)
-            feat["nb_ops_30j"] = nb_ops # simplify for training logic
-            feat["moy_retrait"] = total_m / nb_ops # simplify
+            feat["nb_ops_30j"] = nb_ops
+            feat["moy_retrait"] = total_m / nb_ops
             feat["ratio_solde_habitude"] = feat["solde_total"] / (feat["moy_retrait"] + 1)
             
             for op in ALL_OP_TYPES: feat[op] = counts[op]
@@ -192,22 +187,18 @@ def train_next_event():
 
     print(f"🚀 Training 3 XGBoost models on {len(X)} samples...")
     
-    # 1. Modèle Date (Delta Jours)
     model_date = xgb.XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1)
     model_date.fit(X, y_d)
     joblib.dump(model_date, NEXT_DATE_MODEL_FILE)
 
-    # 2. Modèle Heure
     model_hour = xgb.XGBRegressor(n_estimators=100, max_depth=6, learning_rate=0.1)
     model_hour.fit(X, y_h)
     joblib.dump(model_hour, NEXT_TIME_MODEL_FILE)
 
-    # 3. Modèle Opération
     model_op = xgb.XGBClassifier(n_estimators=100, max_depth=6, learning_rate=0.1)
     model_op.fit(X, y_o)
     joblib.dump(model_op, NEXT_OP_MODEL_FILE)
 
-    # Encodeurs
     joblib.dump(enc_segment, ENCODER_SEGMENT_NEXT_FILE)
     joblib.dump(enc_type_compte, ENCODER_TYPE_COMPTE_FILE)
     joblib.dump(enc_next_op, ENCODER_NEXT_OPERATION_FILE)

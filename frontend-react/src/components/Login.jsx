@@ -74,7 +74,7 @@ const Login = () => {
 
                 {/* Logo */}
                 <div className="relative z-10">
-                    <img src={awbLogo} alt="AWB Logo" className="w-20 h-20 rounded-2xl shadow-2xl object-contain bg-white p-1" />
+                    <img src={awbLogo} alt="Attijariwafa Bank" className="w-20 h-20 rounded-2xl shadow-2xl object-contain bg-white p-2" />
                 </div>
 
                 {/* Texte central */}
@@ -100,7 +100,7 @@ const Login = () => {
                 <div className="w-full max-w-md">
                     {/* Logo mobile */}
                     <div className="flex justify-center mb-8 lg:hidden">
-                        <img src={awbLogo} alt="AWB Logo" className="w-16 h-16 rounded-xl object-contain bg-white p-1 shadow-md" />
+                        <img src={awbLogo} alt="Attijariwafa Bank" className="w-16 h-16 rounded-xl object-contain bg-white p-1.5 shadow-md" />
                     </div>
 
                     {/* Card */}

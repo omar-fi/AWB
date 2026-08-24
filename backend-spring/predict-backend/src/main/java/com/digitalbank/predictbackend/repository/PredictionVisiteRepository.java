@@ -33,4 +33,20 @@ public interface PredictionVisiteRepository extends JpaRepository<PredictionVisi
     @EntityGraph(attributePaths = {"client", "client.comptes"})
     @Query("SELECT p FROM PredictionVisite p JOIN p.client c WHERE c.agence.id = :agenceId ORDER BY p.datePrevue ASC")
     List<PredictionVisite> findAllByAgenceId(@Param("agenceId") Long agenceId);
+
+    /**
+     * Visites attendues sur une fenêtre de dates, pour le flux d'affluence du
+     * directeur.
+     *
+     * La date retenue est la date ajustée quand elle existe : c'est celle que
+     * le conseiller a corrigée à la main, donc celle qui fait foi sur le
+     * planning de l'agence.
+     */
+    @EntityGraph(attributePaths = {"client"})
+    @Query("SELECT p FROM PredictionVisite p JOIN p.client c WHERE c.agence.id = :agenceId " +
+           "AND ((p.datePrevueAjustee IS NOT NULL AND p.datePrevueAjustee BETWEEN :debut AND :fin) " +
+           "  OR (p.datePrevueAjustee IS NULL AND p.datePrevue BETWEEN :debut AND :fin))")
+    List<PredictionVisite> findFluxByAgenceEntre(@Param("agenceId") Long agenceId,
+                                                 @Param("debut") LocalDate debut,
+                                                 @Param("fin") LocalDate fin);
 }

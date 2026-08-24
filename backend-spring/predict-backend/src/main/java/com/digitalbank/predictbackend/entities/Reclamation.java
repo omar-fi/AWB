@@ -40,6 +40,6 @@ public class Reclamation {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "client_id", nullable = false)
-    @JsonIgnoreProperties({"reclamations", "comptes", "prediction", "actions"})
+    @JsonIgnoreProperties({"reclamations", "comptes", "prediction", "actions", "hibernateLazyInitializer", "handler"})
     private Client client;
 }

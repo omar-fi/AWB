@@ -44,4 +44,23 @@ public interface ActionConseillerRepository extends JpaRepository<ActionConseill
 
     // PHASE 9: Paginated Journal
     Page<ActionConseiller> findAllByBanquierAgenceIdOrderByDateActionDesc(Long agenceId, Pageable pageable);
+
+    /**
+     * Services proposés par l'agence depuis une date : une ligne = une
+     * proposition faite à un client par un banquier.
+     *
+     * Le client et le banquier sont ramenés dans la même requête : ils sont
+     * lus pour chaque ligne du tableau directeur, un chargement paresseux
+     * ferait ici une requête par proposition.
+     */
+    @Query("SELECT a FROM ActionConseiller a JOIN FETCH a.client JOIN FETCH a.banquier " +
+           "WHERE a.banquier.agence.id = :agenceId AND a.dateAction >= :debut ORDER BY a.dateAction DESC")
+    List<ActionConseiller> findServicesByAgenceDepuis(@Param("agenceId") Long agenceId,
+                                                      @Param("debut") java.time.LocalDateTime debut);
+
+    // Délégations reçues : actions de délégation sur les clients d'une agence
+    @Query("SELECT a FROM ActionConseiller a WHERE a.client.agence.id = :agenceId " +
+           "AND (a.categorieAction = 'DELEGATION' OR a.statut = 'DELEGUE_COMMERCIAL') " +
+           "ORDER BY a.dateAction DESC")
+    List<ActionConseiller> findDelegationsByAgence(@Param("agenceId") Long agenceId);
 }

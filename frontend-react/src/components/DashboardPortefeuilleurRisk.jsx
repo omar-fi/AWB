@@ -11,10 +11,20 @@ import {
 import awbLogo from '../assets/react.jpeg';
 
 // ── Helpers de Styles AWB Prestige ───────────────────────────────────────────
-const getScoreStyle = (score) => {
-    if (score >= 90) return { bg: '#FFF1F0', text: '#E8391D', bar: '#E8391D', label: 'CRITIQUE', shadow: 'shadow-red-900/20' };
-    if (score >= 70) return { bg: '#FFFBE6', text: '#D48806', bar: '#FFC000', label: 'ALERTE', shadow: 'shadow-yellow-900/10' };
-    return { bg: '#F6FFED', text: '#389E0D', bar: '#52C41A', label: 'SOUS SURVEILLANCE', shadow: 'shadow-green-900/10' };
+// Code couleur du % = PROBABILITÉ DE VISITE (haute = positif = vert ; pas un niveau de risque)
+/**
+ * Pastille d'insatisfaction affichée sur chaque fiche du portefeuille.
+ * Haut = mécontent, donc rouge : c'est le critère de tri de la liste, il doit
+ * se lire au premier coup d'œil.
+ */
+const getInsatisfactionStyle = (score) => {
+    if (score === null || score === undefined)
+        return { bg: '#F5F5F5', text: '#8C8C8C', label: 'Non évalué' };
+    if (score >= 75) return { bg: '#FFF1F0', text: '#CF1322', label: 'Très insatisfait' };
+    if (score >= 50) return { bg: '#FFF2E8', text: '#D4380D', label: 'Insatisfait' };
+    if (score >= 25) return { bg: '#FFFBE6', text: '#D48806', label: 'Mitigé' };
+    if (score >= 10) return { bg: '#F6FFED', text: '#5B8C00', label: 'Plutôt satisfait' };
+    return { bg: '#F6FFED', text: '#389E0D', label: 'Satisfait' };
 };
 
 const getAlerteConfig = (type) => {
@@ -23,6 +33,16 @@ const getAlerteConfig = (type) => {
         case 'DEFAULT': return { bg: 'bg-orange-50', text: 'text-orange-600', border: 'border-orange-100', icon: ShieldAlert, grad: 'from-orange-500 to-amber-500', label: 'Risque d\'Impayé' };
         case 'VIP': return { bg: 'bg-yellow-50', text: 'text-[#B45309]', border: 'border-yellow-200', icon: Zap, grad: 'from-[#FFC000] to-[#FF9C08]', label: 'Alerte VIP' };
         default: return { bg: 'bg-gray-50', text: 'text-gray-600', border: 'border-gray-200', icon: Info, grad: 'from-gray-500 to-gray-400', label: 'Analyse Standard' };
+    }
+};
+
+/** Couleur du pourcentage de risque de churn, alignée sur la palette AWB. */
+const couleurRisque = (niveau) => {
+    switch ((niveau || '').toUpperCase()) {
+        case 'CRITIQUE': return '#E8391D';
+        case 'ÉLEVÉ': return '#D9480F';
+        case 'ALERTE': return '#B45309';
+        default: return '#6B7280';
     }
 };
 
@@ -131,6 +151,13 @@ export default function DashboardPortefeuilleurRisk() {
                     const rawScore = c.prediction?.scoreProbabiliteGlobal || 0;
                     const score = Math.round(rawScore > 1 ? rawScore : rawScore * 100);
 
+                    // Risque de churn : distinct du score de visite ci-dessus.
+                    // Stocké en 0–1 par le moteur IA, toléré en 0–100 par sécurité.
+                    const rawChurn = c.prediction?.scoreChurn;
+                    const risque = (rawChurn === null || rawChurn === undefined)
+                        ? null
+                        : Math.round(rawChurn > 1 ? rawChurn : rawChurn * 100);
+
                     const rawNiveau = (c.prediction?.niveauRisque || '').toUpperCase();
                     const seg = (c.segmentMetier || '').toUpperCase();
                     const isVipSegment = seg.includes('VIP') || seg.includes('PRO') || seg.includes('PME') || seg.includes('TPE');
@@ -139,8 +166,8 @@ export default function DashboardPortefeuilleurRisk() {
                     let label = 'Analyse Standard';
 
                     // Mapping direct niveauRisque (backend déterministe) → alerteType Portefeuilleur
-                    // CRITIQUE = Client très inactif et/ou compte en forte tension = Risque de Churn
-                    if (rawNiveau === 'CRITIQUE') {
+                    // CRITIQUE et ÉLEVÉ = Client très inactif et/ou compte en forte tension = Risque de Churn
+                    if (rawNiveau === 'CRITIQUE' || rawNiveau === 'ÉLEVÉ') {
                         type = 'CHURN';
                         label = 'Risque de Churn (Départ client)';
                     }
@@ -175,6 +202,10 @@ export default function DashboardPortefeuilleurRisk() {
                         alerteType: type,
                         alerteLabel: label,
                         score: score,
+                        risque: risque,
+                        niveauRisque: rawNiveau || null,
+                        insatisfaction: c.prediction?.scoreInsatisfaction ?? null,
+                        niveauSatisfaction: c.prediction?.niveauSatisfaction || null,
                         fiabilite: c.prediction?.fiabilite ? c.prediction.fiabilite.toFixed(1) : (92 + ((c.id || 0) % 5) + ((score || 0) % 3)).toFixed(1),
                         iaDiagnostic: c.prediction?.insightGenai || "Diagnostic IA non généré.",
                         dateVisite: c.prediction?.dateVisitePrevue,
@@ -187,7 +218,19 @@ export default function DashboardPortefeuilleurRisk() {
                     };
                 });
 
-                const sorted = mappedClients.sort((a, b) => b.score - a.score);
+                // Les clients les plus mécontents en tête : c'est l'ordre dans
+                // lequel un conseiller doit traiter son portefeuille. Le tri
+                // précédent se faisait sur le score de visite, qui n'a rien à
+                // voir avec l'urgence relationnelle.
+                // Un client sans score évalué est envoyé en fin de liste plutôt
+                // que traité comme satisfait — on ne sait pas, ce n'est pas
+                // pareil que « il va bien ».
+                const sorted = mappedClients.sort((a, b) => {
+                    const ia = a.insatisfaction ?? -1;
+                    const ib = b.insatisfaction ?? -1;
+                    if (ib !== ia) return ib - ia;
+                    return (b.risque ?? 0) - (a.risque ?? 0);
+                });
                 setClients(sorted);
                 if (sorted.length > 0 && !selectedClient) setSelectedClient(sorted[0]);
             } catch (error) {
@@ -294,11 +337,23 @@ export default function DashboardPortefeuilleurRisk() {
         }
     };
 
+    // Bornes des filtres de satisfaction — alignées sur les seuils du moteur
+    // (agent_analyse.evaluer_satisfaction).
+    const DANS_TRANCHE = {
+        ALL: () => true,
+        TRES_INSATISFAIT: (s) => s !== null && s >= 75,
+        INSATISFAIT: (s) => s !== null && s >= 50 && s < 75,
+        MITIGE: (s) => s !== null && s >= 25 && s < 50,
+        SATISFAIT: (s) => s !== null && s < 25,
+    };
+
     const filteredClients = clients.filter(c => {
         const matchSearch = c.nom.toLowerCase().includes(searchTerm.toLowerCase()) || c.cin.toLowerCase().includes(searchTerm.toLowerCase());
-        const matchFilter = filter === 'ALL' || c.alerteType === filter;
-        return matchSearch && matchFilter;
+        const test = DANS_TRANCHE[filter] || DANS_TRANCHE.ALL;
+        return matchSearch && test(c.insatisfaction ?? null);
     });
+
+    const compteTranche = (cle) => clients.filter(c => DANS_TRANCHE[cle](c.insatisfaction ?? null)).length;
 
     // Reset pagination clients au changement de filtre ou recherche
     useEffect(() => {
@@ -402,13 +457,19 @@ export default function DashboardPortefeuilleurRisk() {
                         </div>
 
                         <div className="flex gap-2 p-1 bg-gray-50 rounded-2xl overflow-x-auto no-scrollbar">
-                            {['ALL', 'CHURN', 'DEFAULT', 'VIP'].map((f) => (
+                            {[
+                                ['ALL', 'Tous'],
+                                ['TRES_INSATISFAIT', 'Très insatisfaits'],
+                                ['INSATISFAIT', 'Insatisfaits'],
+                                ['MITIGE', 'Mitigés'],
+                                ['SATISFAIT', 'Satisfaits'],
+                            ].map(([cle, libelle]) => (
                                 <button
-                                    key={f}
-                                    onClick={() => setFilter(f)}
-                                    className={`whitespace-nowrap px-4 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${filter === f ? 'bg-white text-[#E8391D] shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                                    key={cle}
+                                    onClick={() => setFilter(cle)}
+                                    className={`whitespace-nowrap px-4 py-1.5 rounded-xl text-[10px] font-black uppercase transition-all ${filter === cle ? 'bg-white text-[#E8391D] shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                                 >
-                                    {f === 'ALL' ? `Tous (${clients.length})` : f === 'DEFAULT' ? `Impayés (${nbDefault})` : f === 'CHURN' ? `Churn (${nbChurn})` : `VIP (${nbVip})`}
+                                    {libelle} ({compteTranche(cle)})
                                 </button>
                             ))}
                         </div>
@@ -418,7 +479,7 @@ export default function DashboardPortefeuilleurRisk() {
                         {paginatedClients.map((client) => {
                             const isSelected = selectedClient?.id === client.id;
                             const config = getAlerteConfig(client.alerteType);
-                            const sc = getScoreStyle(client.score);
+                            const sc = getInsatisfactionStyle(client.insatisfaction);
 
                             return (
                                 <div
@@ -433,8 +494,12 @@ export default function DashboardPortefeuilleurRisk() {
                                         <div className="flex-1 min-w-0">
                                             <div className="flex items-center justify-between mb-1">
                                                 <p className={`text-sm font-black truncate ${isSelected ? 'text-[#E8391D]' : 'text-[#1A1A1A]'}`}>{client.nom}</p>
-                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full`} style={{ background: sc.bg, color: sc.text }}>
-                                                    {client.score}%
+                                                <span className={`text-[10px] font-black px-2 py-0.5 rounded-full whitespace-nowrap`}
+                                                      style={{ background: sc.bg, color: sc.text }}
+                                                      title={`Insatisfaction — ${sc.label}`}>
+                                                    {client.insatisfaction === null || client.insatisfaction === undefined
+                                                        ? 'N/É'
+                                                        : `${client.insatisfaction}%`}
                                                 </span>
                                             </div>
                                             <div className="flex items-center gap-2">
@@ -778,9 +843,26 @@ export default function DashboardPortefeuilleurRisk() {
                                                             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{strategie.titre}</p>
                                                         </div>
                                                     </div>
-                                                    <span className={`text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${strategie.badgeCouleur}`}>
-                                                        {strategie.badge}
-                                                    </span>
+                                                    <div className="flex items-center gap-4">
+                                                        {selectedClient.risque !== null && selectedClient.risque !== undefined && (
+                                                            <div className="text-right leading-none">
+                                                                <p className="text-[9px] font-black uppercase tracking-widest text-gray-400 mb-1">
+                                                                    Risque de churn
+                                                                </p>
+                                                                <p className="text-2xl font-black" style={{ color: couleurRisque(selectedClient.niveauRisque) }}>
+                                                                    {selectedClient.risque}%
+                                                                </p>
+                                                                {selectedClient.niveauRisque && (
+                                                                    <p className="text-[9px] font-bold uppercase tracking-widest text-gray-400 mt-1">
+                                                                        {selectedClient.niveauRisque}
+                                                                    </p>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        <span className={`text-[9px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${strategie.badgeCouleur}`}>
+                                                            {strategie.badge}
+                                                        </span>
+                                                    </div>
                                                 </div>
 
                                                 <div className="space-y-4">

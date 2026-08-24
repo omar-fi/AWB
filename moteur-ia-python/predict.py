@@ -41,7 +41,6 @@ for _, row in df_reel.iterrows():
     except:
         seg_enc = 0 
 
-    # ICI : Les noms de colonnes sont EXACTEMENT les mêmes que dans train_model.py
     X_input = pd.DataFrame([[
         seg_enc, solde, habitude, int(row['nb_ops']), ratio
     ]], columns=['seg_enc', 'solde_actuel', 'moyenne_retraits_30j', 'nb_operations_30j', 'ratio_solde_habitude'])

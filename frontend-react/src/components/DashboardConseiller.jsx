@@ -9,7 +9,7 @@ import EditClientModal from './EditClientModal';
 import {
     Users, TrendingUp, Bell, LogOut, Search, Calendar,
     ChevronRight, LayoutDashboard, UserCheck, Loader2,
-    RefreshCw, MessageCircle, Clock, CreditCard, AlertTriangle,
+    MessageCircle, Clock, CreditCard, AlertTriangle,
     Brain, Target, Zap, Shield, Activity, Eye,
     ChevronDown, ChevronUp, Phone, Mail, Trash2, Edit, UserPlus
 } from 'lucide-react';
@@ -18,21 +18,33 @@ import awbLogo from '../assets/react.jpeg';
 // ── Palette AWB ──────────────────────────────────────────────────────────────
 // Rouge : #E8391D | Jaune : #FFC000 | Noir : #1A1A1A | Blanc fond : #F5F5F5
 
+const parseLocalDate = (dateStr) => {
+    if (!dateStr) return null;
+    const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return new Date(dateStr); // Fallback
+    const year = parseInt(match[1], 10);
+    const month = parseInt(match[2], 10) - 1; // 0-indexed month
+    const day = parseInt(match[3], 10);
+    return new Date(year, month, day);
+};
+
 const formatDate = (dateStr) => {
     if (!dateStr) return '—';
-    const d = new Date(dateStr);
+    const d = parseLocalDate(dateStr);
+    if (!d) return '—';
     return d.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
 };
 
 const isToday = (dateStr) => {
     if (!dateStr) return false;
-    const d = new Date(dateStr);
-    return d.toDateString() === new Date().toDateString();
+    const d = parseLocalDate(dateStr);
+    return d && d.toDateString() === new Date().toDateString();
 };
 
 const isFuture = (dateStr) => {
     if (!dateStr) return false;
-    const d = new Date(dateStr);
+    const d = parseLocalDate(dateStr);
+    if (!d) return false;
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     return d > today;
@@ -46,18 +58,29 @@ const getScoreStyle = (score) => {
     return { bg: '#F6FFED', text: '#389E0D', bar: '#52C41A', label: 'Faible' };
 };
 
+/**
+ * Pastille d'insatisfaction. Haut = mécontent, donc rouge : c'est le critère
+ * de tri de la liste, il doit se lire sans effort.
+ */
+const getInsatisfactionBadge = (score) => {
+    if (score >= 75) return { background: '#FFF1F0', color: '#CF1322', borderColor: '#FFCCC7' };
+    if (score >= 50) return { background: '#FFF2E8', color: '#D4380D', borderColor: '#FFD8BF' };
+    if (score >= 25) return { background: '#FFFBE6', color: '#D48806', borderColor: '#FFE58F' };
+    return { background: '#F6FFED', color: '#389E0D', borderColor: '#D9F7BE' };
+};
+
 const getRiskBadge = (niveau) => {
     const n = (niveau || '').toUpperCase();
     if (n === 'CRITIQUE' || n === 'ÉLEVÉ' || n === 'HIGH') {
-        return { cls: 'bg-red-50 text-red-700 border-red-200', icon: '🔴', label: 'Risque critique' };
+        return { cls: 'bg-red-50 text-red-700 border-red-200', label: 'Risque critique' };
     }
     if (n === 'ALERTE' || n === 'MOYEN' || n === 'MEDIUM') {
-        return { cls: 'bg-amber-50 text-amber-700 border-amber-200', icon: '🟡', label: 'Alerte Risque' };
+        return { cls: 'bg-amber-50 text-amber-700 border-amber-200', label: 'Alerte Risque' };
     }
     if (n === 'SOUS SURVEILLANCE' || n === 'FAIBLE' || n === 'LOW') {
-        return { cls: 'bg-blue-50 text-blue-700 border-blue-200', icon: '🔵', label: 'Surveillance' };
+        return { cls: 'bg-blue-50 text-blue-700 border-blue-200', label: 'Surveillance' };
     }
-    return { cls: 'bg-gray-100 text-gray-500 border-gray-200', icon: '⚪', label: 'Non évalué' };
+    return { cls: 'bg-gray-100 text-gray-500 border-gray-200', label: 'Non évalué' };
 };
 
 const getDiagnosticText = (text) => {
@@ -125,7 +148,19 @@ const ConseillerPredictionCard = ({ prediction, onAction, onEdit }) => {
                         </div>
                         <div>
                             <p className="font-black text-[#1A1A1A] text-sm">{nomComplet}</p>
-                            <p className="text-[10px] text-gray-400 font-mono">{cin}</p>
+                            <div className="flex flex-col gap-0.5 mt-0.5">
+                                <p className="text-[10px] text-gray-400 font-mono">{cin}</p>
+                                {client.email && (
+                                    <p className="text-[10px] text-gray-500 flex items-center gap-1 truncate">
+                                        <Mail size={10} className="text-gray-400" /> {client.email}
+                                    </p>
+                                )}
+                                {client.telephone && (
+                                    <p className="text-[10px] text-gray-500 flex items-center gap-1">
+                                        <Phone size={10} className="text-[#E8391D]" /> {client.telephone}
+                                    </p>
+                                )}
+                            </div>
                         </div>
                     </div>
                     <div className="flex flex-col items-end gap-1.5">
@@ -141,7 +176,7 @@ const ConseillerPredictionCard = ({ prediction, onAction, onEdit }) => {
                         <span className="text-xs font-semibold flex items-center gap-1 px-2 py-0.5 rounded-full"
                             style={{ background: todayCard ? '#FEF3F0' : '#F5F5F5', color: todayCard ? '#E8391D' : '#6B7280' }}>
                             <Calendar size={10} />
-                            {todayCard ? '📍 Aujourd\'hui' : formatDate(dateAff)}
+                            {todayCard ? 'Aujourd\'hui' : formatDate(dateAff)}
                         </span>
                     </div>
                 </div>
@@ -163,7 +198,7 @@ const ConseillerPredictionCard = ({ prediction, onAction, onEdit }) => {
                 </div>
 
                 {/* Opportunité Commerciale (Uniquement si transférée par l'expert) */}
-                {instruction && (instruction.statut === 'DELEGUE_COMMERCIAL' || instruction.typeDelegation === 'ACTION_DELEGUE') && (
+                {instruction && (instruction.statut === 'DELEGUE_COMMERCIAL' || instruction.typeDelegation === 'ACTION_DELEGUE' || instruction.categorieAction === 'DELEGATION') && (
                     <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-xl shadow-sm animate-in zoom-in duration-300">
                         <div className="flex items-center gap-2 mb-1">
                             <Target size={12} className="text-[#B45309]" />
@@ -225,7 +260,7 @@ const PredictionCard = ({ prediction, onAction, onEdit, highlight = false }) => 
                     setInstruction(res.data);
                 }
             } catch (err) {
-                console.error("❌ Erreur instruction:", err);
+                console.error("Erreur instruction:", err);
             }
         };
         fetchInstruction();
@@ -319,13 +354,13 @@ const PredictionCard = ({ prediction, onAction, onEdit, highlight = false }) => 
                             }}
                         >
                             <Calendar size={10} />
-                            {todayCard ? '📍 Aujourd\'hui' : formatDate(dateAff)}
+                            {todayCard ? 'Aujourd\'hui' : formatDate(dateAff)}
                         </span>
                     </div>
                 </div>
 
                 {/* Instruction Portefeuilleur (Opportunité Commerciale) */}
-                {instruction && (instruction.statut === 'DELEGUE_COMMERCIAL' || instruction.typeDelegation === 'ACTION_DELEGUE') && (
+                {instruction && (instruction.statut === 'DELEGUE_COMMERCIAL' || instruction.typeDelegation === 'ACTION_DELEGUE' || instruction.categorieAction === 'DELEGATION') && (
                     <div className="mt-4 p-3.5 bg-amber-50 border border-amber-200 rounded-2xl shadow-md animate-in fade-in slide-in-from-top-2 duration-500">
                         <div className="flex items-center gap-2 mb-1.5">
                             <Target size={14} className="text-[#B45309]" />
@@ -352,8 +387,17 @@ const PredictionCard = ({ prediction, onAction, onEdit, highlight = false }) => 
                         </span>
                     )}
                     <span className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium border ${risk.cls}`}>
-                        {risk.icon} {risk.label}
+                        {risk.label}
                     </span>
+                    {prediction.scoreInsatisfaction !== null && prediction.scoreInsatisfaction !== undefined && (
+                        <span
+                            className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full font-medium border"
+                            style={getInsatisfactionBadge(prediction.scoreInsatisfaction)}
+                            title="Insatisfaction du client — critère de tri de la liste"
+                        >
+                            {prediction.scoreInsatisfaction}% insatisfait
+                        </span>
+                    )}
                 </div>
 
                 {score > 0 && (
@@ -423,7 +467,7 @@ const PredictionCard = ({ prediction, onAction, onEdit, highlight = false }) => 
 };
 
 // ── Vue Agenda ────────────────────────────────────────────────────────────────
-const AgendaView = ({ predictions, onAction, onEdit }) => {
+const AgendaView = ({ predictions, onAction, onEdit, showFull }) => {
     const grouped = {};
     for (const p of predictions) {
         const d = p.datePrevueAjustee || p.datePrevue;
@@ -471,7 +515,10 @@ const AgendaView = ({ predictions, onAction, onEdit }) => {
                         </div>
                         <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4 border-l-[3px] border-gray-100 ml-5 pl-8 py-2 relative">
                             <div className="absolute top-0 bottom-0 left-[-3px] w-[3px] rounded-full" style={{ background: isTdy ? '#FFC000' : 'transparent' }} />
-                            {preds.map(p => <PredictionCard key={p.id} prediction={p} onAction={onAction} onEdit={onEdit} />)}
+                            {preds.map(p => showFull
+                                ? <PredictionCard key={p.id} prediction={p} onAction={onAction} onEdit={onEdit} highlight />
+                                : <ConseillerPredictionCard key={p.id} prediction={p} onAction={onAction} onEdit={onEdit} />
+                            )}
                         </div>
                     </section>
                 );
@@ -484,6 +531,7 @@ const AgendaView = ({ predictions, onAction, onEdit }) => {
 const DashboardConseiller = () => {
     const { user, logout, hasPermission } = useAuth();
     const [allPredictions, setAllPredictions] = useState([]);
+    const [delegations, setDelegations] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedPrediction, setSelectedPrediction] = useState(null);
     const [isActionModalOpen, setIsActionModalOpen] = useState(false);
@@ -535,6 +583,8 @@ const DashboardConseiller = () => {
                     insightGenai: fallback.insightGenai || null,
                     niveauRisque: fallback.niveauRisque || client.niveauRisque || null,
                     strategiePrescrite: fallback.strategiePrescrite || fallback.strategie_prescrite || null,
+                    scoreInsatisfaction: fallback.scoreInsatisfaction ?? null,
+                    niveauSatisfaction: fallback.niveauSatisfaction || null,
                 };
             });
 
@@ -560,7 +610,14 @@ const DashboardConseiller = () => {
         }
     };
 
-    useEffect(() => { fetchAllData(); }, [user.agenceId]);
+    const fetchDelegations = async () => {
+        try {
+            const res = await api.get(`/actions/agence/${user.agenceId}/delegations`);
+            setDelegations(res.data || []);
+        } catch (err) { console.error('fetchDelegations:', err); }
+    };
+
+    useEffect(() => { fetchAllData(); fetchDelegations(); }, [user.agenceId]);
 
     useEffect(() => {
         setClientPageActive(0);
@@ -578,9 +635,32 @@ const DashboardConseiller = () => {
             || (p.operationPrevue || '').toLowerCase().includes(term);
     };
 
-    const baseToday = allPredictions.filter(p => isToday(p.datePrevueAjustee || p.datePrevue));
-    const displayList = (activeTab === 'today' ? baseToday : allPredictions).filter(filterFn);
-    const todayPreds = baseToday.filter(filterFn);
+    // "Clients attendus" = prédictions du jour OU dont la date prévue est passée (visites en attente)
+    const isTodayOrPast = (dateStr) => {
+        if (!dateStr) return false;
+        const d = parseLocalDate(dateStr);
+        if (!d) return false;
+        const today = new Date();
+        today.setHours(23, 59, 59, 999);
+        return d <= today;
+    };
+
+    // Délégations reçues aujourd'hui : alimente le compteur du menu et la pastille NOUVEAU.
+    const delegationsDuJour = delegations.filter(d => isToday(d.dateAction));
+
+    // Les clients mécontents en tête : c'est l'ordre dans lequel le conseiller
+    // doit traiter sa journée. Un client sans score évalué passe en fin de
+    // liste plutôt qu'en tête — ne pas savoir n'est pas la même chose qu'aller mal.
+    const parInsatisfaction = (a, b) =>
+        (b.scoreInsatisfaction ?? -1) - (a.scoreInsatisfaction ?? -1);
+
+    const baseToday = allPredictions.filter(p => isTodayOrPast(p.datePrevueAjustee || p.datePrevue));
+    const displayList = (activeTab === 'today' ? baseToday : allPredictions)
+        .filter(filterFn)
+        .sort(parInsatisfaction);
+    const todayPreds = baseToday.filter(filterFn).sort(parInsatisfaction);
+    // Choix de carte commun aux vues "Clients attendus" et "Agenda" (cohérence d'affichage)
+    const showFull = user.role === 'PORTEFEUILLEUR' || user.role === 'DIRECTEUR' || hasPermission('CAN_ANALYZE_CLIENTS');
 
     const NavItem = ({ tab, icon: Icon, label, count, accent }) => (
         <button
@@ -633,6 +713,9 @@ const DashboardConseiller = () => {
                         >
                             <Calendar size={17} /><span>Agenda IA</span>
                         </button>
+                        {!showFull && (
+                            <NavItem tab="delegations" icon={Bell} label="Délégations reçues" count={delegationsDuJour.length} accent />
+                        )}
                         {(user.role === 'PORTEFEUILLEUR' || user.role === 'DIRECTEUR' || hasPermission('CAN_VIEW_ALL_PREDICTIONS') || hasPermission('CAN_VIEW_PORTFOLIO')) && (
                             <NavItem tab="portefeuille" icon={Users} label="Portefeuille Clients" count={clientsPage.totalElements} />
                         )}
@@ -674,9 +757,10 @@ const DashboardConseiller = () => {
                 >
                     <div>
                         <h1 className="text-lg font-black tracking-tight" style={{ color: '#1A1A1A' }}>
-                            {activeTab === 'today' ? '⚡ Clients attendus aujourd\'hui'
+                            {activeTab === 'today' ? 'Clients attendus aujourd\'hui'
                                 : activeTab === 'agenda' ? ' Agenda IA des visites'
-                                    : '👥 Gestion du Portefeuille Clients'}
+                                    : activeTab === 'delegations' ? 'Délégations reçues du Portefeuilleur'
+                                        : 'Gestion du Portefeuille Clients'}
                         </h1>
                         <p className="text-xs mt-0.5" style={{ color: '#9CA3AF' }}>
                             Agence {user.agenceNom}
@@ -692,13 +776,6 @@ const DashboardConseiller = () => {
                                 <UserPlus size={14} /> Ajouter client
                             </button>
                         )}
-                        <button
-                            onClick={fetchAllData}
-                            className="flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs border transition-all hover:shadow-sm"
-                            style={{ background: 'white', borderColor: '#E5E7EB', color: '#1A1A1A' }}
-                        >
-                            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> Actualiser
-                        </button>
                     </div>
                 </header>
 
@@ -726,16 +803,35 @@ const DashboardConseiller = () => {
                             <p className="font-bold text-gray-700">{error}</p>
                         </div>
                     ) : activeTab === 'today' ? (
-                        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
-                            {displayList.map(p => {
-                                const showFull = user.role === 'PORTEFEUILLEUR' || user.role === 'DIRECTEUR' || hasPermission('CAN_ANALYZE_CLIENTS');
-                                return showFull
-                                    ? <PredictionCard key={p.id} prediction={p} onAction={p2 => { setSelectedPrediction(p2); setIsActionModalOpen(true); }} onEdit={c => { setSelectedClientForEdit(c); setIsEditModalOpen(true); }} highlight />
-                                    : <ConseillerPredictionCard key={p.id} prediction={p} onAction={p2 => { setSelectedPrediction(p2); setIsActionModalOpen(true); }} onEdit={c => { setSelectedClientForEdit(c); setIsEditModalOpen(true); }} />
-                            })}
-                        </div>
+                        displayList.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-24 text-center">
+                                <div className="w-20 h-20 rounded-2xl flex items-center justify-center mb-5" style={{ background: 'linear-gradient(135deg,#FEF3F0,#FFF7E6)' }}>
+                                    <Zap size={36} style={{ color: '#E8391D' }} />
+                                </div>
+                                <p className="font-black text-gray-800 text-lg">Aucun client prévu aujourd'hui</p>
+                                {allPredictions.length === 0 ? (
+                                    <p className="text-sm text-gray-400 mt-2 max-w-sm">
+                                        Le moteur IA n'a pas encore généré de prédictions pour cette agence.<br />
+                                        <span className="font-bold text-[#E8391D]">Lancez le moteur IA Python</span> pour calculer les prédictions de visite.
+                                    </p>
+                                ) : (
+                                    <p className="text-sm text-gray-400 mt-2 max-w-sm">
+                                        {allPredictions.length} client(s) dans le planning — aucun n'est prévu pour aujourd'hui.<br />
+                                        Consultez <span className="font-bold text-[#1A1A1A]">l'Agenda IA</span> pour voir les prochaines visites.
+                                    </p>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
+                                {displayList.map(p => {
+                                    return showFull
+                                        ? <PredictionCard key={p.id} prediction={p} onAction={p2 => { setSelectedPrediction(p2); setIsActionModalOpen(true); }} onEdit={c => { setSelectedClientForEdit(c); setIsEditModalOpen(true); }} highlight />
+                                        : <ConseillerPredictionCard key={p.id} prediction={p} onAction={p2 => { setSelectedPrediction(p2); setIsActionModalOpen(true); }} onEdit={c => { setSelectedClientForEdit(c); setIsEditModalOpen(true); }} />;
+                                })}
+                            </div>
+                        )
                     ) : activeTab === 'agenda' ? (
-                        <AgendaView predictions={displayList} onAction={p2 => { setSelectedPrediction(p2); setIsActionModalOpen(true); }} onEdit={c => { setSelectedClientForEdit(c); setIsEditModalOpen(true); }} />
+                        <AgendaView predictions={displayList} showFull={showFull} onAction={p2 => { setSelectedPrediction(p2); setIsActionModalOpen(true); }} onEdit={c => { setSelectedClientForEdit(c); setIsEditModalOpen(true); }} />
                     ) : activeTab === 'portefeuille' ? (
                         <ClientTable
                             clientsFiltres={clientsPage.content}
@@ -754,6 +850,68 @@ const DashboardConseiller = () => {
                             onEditClient={(c) => { setSelectedClientForEdit(c); setIsEditModalOpen(true); }}
                             onCreateClient={() => setIsCreateModalOpen(true)}
                         />
+                    ) : activeTab === 'delegations' ? (
+                        delegations.length === 0 ? (
+                            <div className="flex flex-col items-center justify-center py-24 text-center">
+                                <div className="w-20 h-20 rounded-2xl flex items-center justify-center mb-5" style={{ background: 'linear-gradient(135deg,#FEF3F0,#FFF7E6)' }}>
+                                    <Bell size={36} style={{ color: '#E8391D' }} />
+                                </div>
+                                <p className="font-black text-gray-800 text-lg">Aucune délégation reçue</p>
+                                <p className="text-sm text-gray-400 mt-2 max-w-sm">Les instructions déléguées par le portefeuilleur apparaîtront ici.</p>
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                {delegations.map(d => {
+                                    const c = d.client || {};
+                                    const haute = (d.priorite || '').toUpperCase() === 'HAUTE';
+                                    // Nouveauté = délégation reçue aujourd'hui (même règle que le compteur du menu).
+                                    const nouvelle = isToday(d.dateAction);
+                                    return (
+                                        <div
+                                            key={d.id}
+                                            className="rounded-2xl border p-5 shadow-sm"
+                                            style={{
+                                                background: nouvelle ? '#FFFDF5' : '#FFFFFF',
+                                                borderColor: nouvelle ? '#FDE68A' : '#E5E7EB',
+                                                borderLeftColor: nouvelle ? '#FFC000' : '#E5E7EB',
+                                                borderLeftWidth: nouvelle ? '5px' : '1px',
+                                            }}
+                                        >
+                                            <div className="flex items-start justify-between gap-3 mb-3">
+                                                <div className="flex items-center gap-3 min-w-0">
+                                                    <div className="w-10 h-10 rounded-xl flex items-center justify-center font-black text-white flex-shrink-0" style={{ background: 'linear-gradient(135deg,#E8391D,#FFC000)' }}>
+                                                        {(c.nomComplet || '?').charAt(0).toUpperCase()}
+                                                    </div>
+                                                    <div className="min-w-0">
+                                                        <p className="font-black text-[#1A1A1A] text-sm">{c.nomComplet || 'Client'}</p>
+                                                        <p className="text-[10px] text-gray-400 font-mono">{c.cin || ''}</p>
+                                                    </div>
+                                                </div>
+                                                <div className="flex items-center gap-2 flex-shrink-0">
+                                                    {nouvelle && (
+                                                        <span className="text-[10px] font-black px-2 py-1 rounded-full uppercase tracking-widest" style={{ background: '#FFC000', color: '#1A1A1A' }}>
+                                                            Nouveau
+                                                        </span>
+                                                    )}
+                                                    <span className="text-[10px] font-black px-2 py-1 rounded-full" style={{ background: haute ? '#FEF2F2' : '#F5F5F5', color: haute ? '#E8391D' : '#6B7280' }}>
+                                                        {d.priorite || 'NORMALE'}
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            <div className="rounded-xl p-3 mb-3" style={{ background: '#FFF8E1', border: '1px solid #FDE68A' }}>
+                                                <p className="text-[9px] font-black uppercase tracking-widest text-amber-600 mb-1">Instruction du Portefeuilleur</p>
+                                                <p className="text-sm text-[#1A1A1A] italic">"{d.commentaire}"</p>
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-4 text-xs">
+                                                {c.email && <a href={`mailto:${c.email}`} className="flex items-center gap-1 text-gray-600 hover:text-[#E8391D]"><Mail size={13} /> {c.email}</a>}
+                                                {c.telephone && <a href={`tel:${c.telephone}`} className="flex items-center gap-1 font-bold text-[#E8391D]"><Phone size={13} /> {c.telephone}</a>}
+                                                <span className="text-gray-400 ml-auto">{d.dateAction ? new Date(d.dateAction).toLocaleDateString('fr-FR') : ''}</span>
+                                            </div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )
                     ) : null}
 
                 </div>

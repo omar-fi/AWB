@@ -32,11 +32,11 @@ public class ActionConseiller {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "banquier_id")
-    @JsonIgnoreProperties("actions")
+    @JsonIgnoreProperties({"actions", "hibernateLazyInitializer", "handler"})
     private Banquier banquier;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "client_id")
-    @JsonIgnoreProperties({ "actions", "comptes", "prediction" })
+    @JsonIgnoreProperties({"actions", "comptes", "prediction", "hibernateLazyInitializer", "handler"})
     private Client client;
 }

@@ -61,11 +61,9 @@ def seed():
     conn   = mysql.connector.connect(**DB_CONFIG)
     cursor = conn.cursor(dictionary=True)
 
-    # Récupère tous les clients
     cursor.execute("SELECT id FROM client ORDER BY id")
     clients = [r["id"] for r in cursor.fetchall()]
 
-    # Vérifie si des réclamations existent déjà
     cursor.execute("SELECT COUNT(*) AS nb FROM reclamation")
     nb_existantes = cursor.fetchone()["nb"]
     if nb_existantes > 0:
@@ -79,7 +77,6 @@ def seed():
     insert_cursor = conn.cursor()
     nb_inserees = 0
 
-    # 40 % des clients ont au moins une réclamation
     clients_avec_rec = random.sample(clients, k=max(1, int(len(clients) * 0.40)))
 
     for client_id in clients_avec_rec:

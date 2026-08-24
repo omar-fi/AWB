@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║         SCRIPT D'ENTRAÎNEMENT XGBOOST — CHURN / PROBABILITÉ DE VISITE      ║
+║         SCRIPT D'ENTRAÎNEMENT XGBOOST — CHURN / PROBABILITÉ DE VISITE       ║
 ║         Secteur Bancaire Maroc — AWB IA                    v2.0.0           ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  Auteur     : Data Science Team — AWB                                       ║
@@ -9,7 +9,7 @@
 ║                                                                              ║
 ║  Nouveautés v2 :                                                             ║
 ║    • Features WEEKEND (est_weekend, est_samedi, est_dimanche)               ║
-║    • Features HORAIRES BANCAIRES (8h–16h30) : dans_horaires_banque,        ║
+║    • Features HORAIRES BANCAIRES (8h–16h30) : dans_horaires_banque,         ║
 ║      heure_decimale, decalage_ouverture, decalage_fermeture,                ║
 ║      est_heure_pointe, est_fin_journee                                      ║
 ║    • Score de confiance minimum de 80 % (seuil sur predict_proba)           ║
@@ -27,9 +27,6 @@ Import dans un pipeline existant :
     from train_xgboost import preprocess_donnees
 """
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IMPORTS
-# ─────────────────────────────────────────────────────────────────────────────
 import sys
 import pandas as pd
 import numpy as np
@@ -49,34 +46,29 @@ from sklearn.metrics import (
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTES MÉTIER — BANQUE MAROC
-# ─────────────────────────────────────────────────────────────────────────────
 
-HORIZON_FERIE_JOURS = 30       # Fenêtre de recherche du prochain jour férié (jours)
+HORIZON_FERIE_JOURS = 30     
+HEURE_OUVERTURE     = 8.0      
+HEURE_FERMETURE     = 16.5     
+HEURE_POINTE_DEBUT  = 11.0     
+HEURE_POINTE_FIN    = 14.0     
+HEURE_FIN_JOURNEE   = 15.5    
+SEUIL_CONFIANCE_MIN = 0.80    
 
-# Horaires officiels des agences AWB / banques marocaines
-HEURE_OUVERTURE     = 8.0      # 08h00
-HEURE_FERMETURE     = 16.5     # 16h30 (16 + 30/60)
-HEURE_POINTE_DEBUT  = 11.0     # Début heure de pointe agence (11h)
-HEURE_POINTE_FIN    = 14.0     # Fin heure de pointe agence (14h)
-HEURE_FIN_JOURNEE   = 15.5     # Seuil "fin de journée" (15h30) — flux ralenti
-
-# Seuil de confiance minimum pour valider une prédiction (exigence métier)
-SEUIL_CONFIANCE_MIN = 0.80     # 80 % de probabilité minimum requis
-
-# Version du modèle
 VERSION_MODELE = "2.0.0-maroc-horaires-weekend"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ÉTAPE 1 — FEATURE ENGINEERING MAROC (Fériés + Weekend + Horaires Bancaires)
-# ══════════════════════════════════════════════════════════════════════════════
+def _log(verbose: bool, *args, **kwargs) -> None:
+    """print() conditionnel : l'entraînement trace, l'inférence reste silencieuse."""
+    if verbose:
+        print(*args, **kwargs)
+
 
 def preprocess_donnees(
     df: pd.DataFrame,
     date_col: str = "date_operation",
     heure_col: str = "heure_operation",
+    verbose: bool = True,
 ) -> pd.DataFrame:
     """
     Applique un Feature Engineering complet orienté calendrier et horaires
@@ -122,7 +114,6 @@ def preprocess_donnees(
         DataFrame enrichi des 3 blocs de features (12 nouvelles colonnes).
     """
 
-    # ── Validation ────────────────────────────────────────────────────────────
     if date_col not in df.columns:
         raise ValueError(
             f"Colonne '{date_col}' introuvable. "
@@ -132,31 +123,25 @@ def preprocess_donnees(
     df = df.copy()
     df[date_col] = pd.to_datetime(df[date_col])
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  BLOC A — JOURS FÉRIÉS MAROC
-    # ══════════════════════════════════════════════════════════════════════════
-    print("   📅 Bloc A : Calcul des features jours fériés Maroc...")
+    _log(verbose, "   📅 Bloc A : Calcul des features jours fériés Maroc...")
 
     annees = df[date_col].dt.year.unique().tolist()
     annees_elargi = sorted(set(annees + [a + 1 for a in annees]))
     feries_ma = holidays.Morocco(years=annees_elargi)
 
-    mots_clefs_aid = ["eid al-fitr", "eid al-adha"]
+    mots_clefs_aid = ["eid al-fitr", "eid al-adha", "rupture", "sacrifice", "الفطر", "الأضحى"]
 
     def _features_feries(dt: pd.Timestamp) -> dict:
         d = dt.date()
 
-        # Jour férié ?
         est_ferie = int(d in feries_ma)
 
-        # Nombre de jours avant le prochain jour férié dans les 30 jours
         jours_avant = HORIZON_FERIE_JOURS
         for delta in range(1, HORIZON_FERIE_JOURS + 1):
             if (d + timedelta(days=delta)) in feries_ma:
                 jours_avant = delta
                 break
 
-        # Veille d'Aïd ?
         nom_lendemain = feries_ma.get(d + timedelta(days=1), "").lower()
         est_veille = int(any(mot in nom_lendemain for mot in mots_clefs_aid))
 
@@ -170,79 +155,52 @@ def preprocess_donnees(
         df[date_col].apply(_features_feries).tolist(), index=df.index
     )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  BLOC B — WEEKEND
-    # ══════════════════════════════════════════════════════════════════════════
-    print("   📅 Bloc B : Calcul des features weekend...")
+    _log(verbose, "   📅 Bloc B : Calcul des features weekend...")
 
-    # dayofweek : 0=Lundi, 1=Mardi, …, 5=Samedi, 6=Dimanche
     jour_semaine = df[date_col].dt.dayofweek
 
     feats_weekend = pd.DataFrame({
-        # Samedi (5) ou Dimanche (6) → agence fermée ou horaires réduits
         "est_weekend": (jour_semaine >= 5).astype(int),
-        # Samedi seul : en Maroc les banques ouvrent le samedi matin (8h–13h)
         "est_samedi": (jour_semaine == 5).astype(int),
-        # Dimanche : fermeture totale
         "est_dimanche": (jour_semaine == 6).astype(int),
-        # Encodage ordinal du jour de semaine (0–6)
         "jour_semaine": jour_semaine.values,
     }, index=df.index)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  BLOC C — HORAIRES BANCAIRES (8h00 – 16h30)
-    # ══════════════════════════════════════════════════════════════════════════
-    print("   ⏰ Bloc C : Calcul des features horaires bancaires (8h–16h30)...")
+    _log(verbose, "   ⏰ Bloc C : Calcul des features horaires bancaires (8h–16h30)...")
 
     if heure_col in df.columns:
-        # heure_operation est déjà en format décimal (ex: 14.5 = 14h30)
         heure_dec = df[heure_col].fillna(HEURE_OUVERTURE)
     else:
-        # Colonne absente : on simule une heure en pleine journée par défaut
-        print(f"   ⚠️  Colonne '{heure_col}' absente → features horaires à valeurs neutres.")
+        _log(verbose, f"   ⚠️  Colonne '{heure_col}' absente → features horaires à valeurs neutres.")
         heure_dec = pd.Series(
             np.full(len(df), (HEURE_OUVERTURE + HEURE_FERMETURE) / 2.0),
             index=df.index
         )
 
     feats_horaires = pd.DataFrame({
-        # Heure de l'opération en décimal (8.5 = 8h30)
         "heure_decimale": heure_dec.values,
 
-        # L'opération a-t-elle eu lieu dans les horaires ouverts bancaires ?
-        # Le Samedi, les banques ferment à 13h, donc la borne Sat est 13h
         "dans_horaires_banque": np.where(
             feats_weekend["est_samedi"].values == 1,
-            # Samedi : 8h–13h
             ((heure_dec >= HEURE_OUVERTURE) & (heure_dec <= 13.0)).astype(int),
-            # Semaine : 8h–16h30 (et Dimanche = 0)
             np.where(
                 feats_weekend["est_dimanche"].values == 1,
-                0,  # Dimanche : toujours fermé
+                0,
                 ((heure_dec >= HEURE_OUVERTURE) & (heure_dec <= HEURE_FERMETURE)).astype(int),
             )
         ),
 
-        # Nombre d'heures écoulées depuis l'ouverture (>0 dans les horaires)
-        # Clampé à 0 si avant l'ouverture
         "decalage_ouverture": np.clip(heure_dec - HEURE_OUVERTURE, 0, None).values,
 
-        # Nombre d'heures restantes avant la fermeture (>0 dans les horaires)
-        # Clampé à 0 si après la fermeture
         "decalage_fermeture": np.clip(HEURE_FERMETURE - heure_dec, 0, None).values,
 
-        # Heure de pointe : affluence maximale en agence (11h–14h)
         "est_heure_pointe": (
             (heure_dec >= HEURE_POINTE_DEBUT) & (heure_dec <= HEURE_POINTE_FIN)
         ).astype(int),
 
-        # Fin de journée bancaire : flux ralenti après 15h30
         "est_fin_journee": (heure_dec >= HEURE_FIN_JOURNEE).astype(int),
     }, index=df.index)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    #  FUSION DES 3 BLOCS
-    # ══════════════════════════════════════════════════════════════════════════
     df = pd.concat([df, feats_feries, feats_weekend, feats_horaires], axis=1)
 
     nb_feries    = df["est_jour_ferie"].sum()
@@ -250,7 +208,7 @@ def preprocess_donnees(
     nb_en_heures = df["dans_horaires_banque"].sum()
     nb_pointe    = df["est_heure_pointe"].sum()
 
-    print(
+    _log(verbose, 
         f"   ✅ Features générées :\n"
         f"      • Jours fériés       : {nb_feries}\n"
         f"      • Weekends           : {nb_weekends}\n"
@@ -261,9 +219,6 @@ def preprocess_donnees(
     return df
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ÉTAPE 2 — GÉNÉRATION DES DONNÉES SIMULÉES (MOCK DATA BANCAIRE ENRICHI)
-# ══════════════════════════════════════════════════════════════════════════════
 
 def generer_mock_data(n_clients: int = 1000, seed: int = 42) -> pd.DataFrame:
     """
@@ -288,7 +243,6 @@ def generer_mock_data(n_clients: int = 1000, seed: int = 42) -> pd.DataFrame:
     """
     rng = np.random.default_rng(seed)
 
-    # ── Dates (2023 – Juin 2025) ──────────────────────────────────────────────
     date_debut = date(2023, 1, 1)
     date_fin   = date(2025, 6, 30)
     n_jours    = (date_fin - date_debut).days
@@ -297,20 +251,17 @@ def generer_mock_data(n_clients: int = 1000, seed: int = 42) -> pd.DataFrame:
         for _ in range(n_clients)
     ]
 
-    # ── Heures d'opération (distribution réaliste) ────────────────────────────
-    # 70 % : plage bancaire 8h–16h30 (semaine) ; 30 % : hors plage ou nuit
     heures_banque = rng.uniform(HEURE_OUVERTURE, HEURE_FERMETURE, size=n_clients)
     heures_hors   = rng.choice(
         np.concatenate([
-            rng.uniform(0, HEURE_OUVERTURE, size=500),      # Nuit / tôt matin
-            rng.uniform(HEURE_FERMETURE, 24.0, size=500),   # Soir
+            rng.uniform(0, HEURE_OUVERTURE, size=500),      
+            rng.uniform(HEURE_FERMETURE, 24.0, size=500),   
         ]),
         size=n_clients,
     )
     masque_banque = rng.binomial(n=1, p=0.70, size=n_clients).astype(bool)
     heures = np.where(masque_banque, heures_banque, heures_hors).round(2)
 
-    # ── Features comportementales ─────────────────────────────────────────────
     montant_moyen       = rng.normal(loc=6000, scale=4000, size=n_clients).clip(min=100)
     frequence_retrait   = rng.poisson(lam=6, size=n_clients).clip(min=0, max=30)
     solde_moyen         = rng.normal(loc=18000, scale=10000, size=n_clients).clip(min=0)
@@ -318,24 +269,18 @@ def generer_mock_data(n_clients: int = 1000, seed: int = 42) -> pd.DataFrame:
     anciennete          = rng.uniform(0.5, 15, size=n_clients).round(1)
     segment_metier_enc  = rng.choice([0, 1, 2], size=n_clients, p=[0.68, 0.22, 0.10])
 
-    # Proportion d'opérations hors horaires → signal digital fort
     nb_ops_hors_horaires = (~masque_banque).astype(int)
     ratio_digital = (nb_ops_hors_horaires / (nb_operations_30j + 1)).round(4)
 
-    # ── Cible CHURN (règle métier enrichie) ───────────────────────────────────
-    # Les clients qui fuient l'agence (fort ratio digital) + faible engagement
-    # + solde bas + peu d'ancienneté = risque churn élevé
     score_churn = (
-        (montant_moyen < 3500).astype(int)         # Engagement montant faible
-        + (frequence_retrait < 3).astype(int)       # Peu de retraits
-        + (nb_operations_30j < 2).astype(int)       # Peu actif
-        + (solde_moyen < 6000).astype(int)          # Solde critique
-        + (anciennete < 2).astype(int)              # Client récent = volatile
-        + (ratio_digital > 0.5).astype(int)         # Forte utilisation digitale
+        (montant_moyen < 3500).astype(int)        
+        + (frequence_retrait < 3).astype(int)      
+        + (nb_operations_30j < 2).astype(int)      
+        + (solde_moyen < 6000).astype(int)        
+        + (anciennete < 2).astype(int)            
+        + (ratio_digital > 0.5).astype(int)        
     )
-    # Seuil à ≥ 3 sur 6 critères → churner (génère ~35-40% de positifs)
     cible_churn = (score_churn >= 3).astype(int)
-    # Bruit réduit à 5 % pour faciliter l'apprentissage (objectif 80 %)
     bruit = rng.binomial(n=1, p=0.05, size=n_clients)
     cible_churn = np.abs(cible_churn - bruit).clip(0, 1)
 
@@ -344,12 +289,12 @@ def generer_mock_data(n_clients: int = 1000, seed: int = 42) -> pd.DataFrame:
         "montant_moyen":         montant_moyen.round(2),
         "frequence_retrait":     frequence_retrait,
         "date_operation":        dates,
-        "heure_operation":       heures,        # ← NOUVEAU : heure décimale
+        "heure_operation":       heures,       
         "solde_moyen":           solde_moyen.round(2),
         "nb_operations_30j":     nb_operations_30j,
-        "nb_ops_hors_horaires":  nb_ops_hors_horaires, # ← NOUVEAU
-        "ratio_digital":         ratio_digital,         # ← NOUVEAU
-        "anciennete_client_ans": anciennete,            # ← NOUVEAU
+        "nb_ops_hors_horaires":  nb_ops_hors_horaires,
+        "ratio_digital":         ratio_digital,       
+        "anciennete_client_ans": anciennete,            
         "segment_metier_enc":    segment_metier_enc,
         "cible_churn":           cible_churn,
     })
@@ -361,22 +306,17 @@ def generer_mock_data(n_clients: int = 1000, seed: int = 42) -> pd.DataFrame:
     return df
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ÉTAPE 3 — PIPELINE D'ENTRAÎNEMENT AVEC VALIDATION DU SCORE ≥ 80 %
-# ══════════════════════════════════════════════════════════════════════════════
-
-# Hyperparamètres optimisés pour atteindre ≥ 80 % d'accuracy
 HYPERPARAMS_XGBOOST = {
-    "n_estimators":     1000,   # Plafond max — le modèle s'arrêtera avant via Early Stopping
-    "max_depth":        5,      # Profondeur suffisante pour capturer les interactions
-    "learning_rate":    0.05,   # Learning rate réduit pour une convergence stable
-    "subsample":        0.85,   # Fraction des samples (anti-overfitting)
-    "colsample_bytree": 0.85,   # Fraction des features par arbre
-    "min_child_weight": 5,      # Régularisation sur les feuilles
-    "gamma":            0.05,   # Pénalité faible sur les splits
-    "reg_alpha":        0.1,    # Régularisation L1 (Lasso)
-    "reg_lambda":       1.5,    # Régularisation L2 (Ridge)
-    "eval_metric":      "auc",  # AUC plus robuste que logloss pour le churn
+    "n_estimators":     1000,
+    "max_depth":        5,
+    "learning_rate":    0.05,
+    "subsample":        0.85,
+    "colsample_bytree": 0.85,
+    "min_child_weight": 5,
+    "gamma":            0.05,
+    "reg_alpha":        0.1,
+    "reg_lambda":       1.5,
+    "eval_metric":      "auc",
     "random_state":     42,
     "n_jobs":           -1,
 }
@@ -402,11 +342,9 @@ def entrainer_modele(df: pd.DataFrame):
     tuple : (modele, X_test, y_test, feature_cols)
     """
 
-    # ── 3.1 Preprocessing complet ────────────────────────────────────────────
     print("\n⚙️  Preprocessing des données...")
     df = preprocess_donnees(df, date_col="date_operation", heure_col="heure_operation")
 
-    # ── 3.2 Sélection des features ────────────────────────────────────────────
     colonnes_a_exclure = ["client_id", "date_operation", "cible_churn"]
     feature_cols = [c for c in df.columns if c not in colonnes_a_exclure]
 
@@ -417,7 +355,6 @@ def entrainer_modele(df: pd.DataFrame):
     X = df[feature_cols].fillna(0)
     y = df["cible_churn"]
 
-    # ── 3.3 Split stratifié 80/20 ─────────────────────────────────────────────
     X_train, X_test, y_train, y_test = train_test_split(
         X, y,
         test_size=0.20,
@@ -427,21 +364,17 @@ def entrainer_modele(df: pd.DataFrame):
     print(f"\n   ✂️  Split : {len(X_train)} train | {len(X_test)} test")
     print(f"   ⚖️  Déséquilibre train : {y_train.sum()} churners / {(y_train==0).sum()} fidèles")
 
-    # ── 3.4 Calcul du poids de classe pour gérer le déséquilibre ─────────────
     ratio_classes = (y_train == 0).sum() / (y_train == 1).sum()
     print(f"   ⚖️  scale_pos_weight = {ratio_classes:.2f}")
 
-    # ── 3.5 Entraînement XGBClassifier avec Early Stopping ───────────────────
     print("\n🚀 Entraînement du modèle XGBClassifier (Early Stopping activé)...")
 
     modele = xgb.XGBClassifier(
         **HYPERPARAMS_XGBOOST,
         scale_pos_weight=ratio_classes,
-        early_stopping_rounds=50,      # S'arrête automatiquement si pas d'amélioration en 50 rounds
+        early_stopping_rounds=50,      
     )
 
-    # ── Séparation train / validation interne (pour Early Stopping) ──────────
-    # On prélève 15% du train comme validation interne (ne touche pas au test)
     X_tr, X_val, y_tr, y_val = train_test_split(
         X_train, y_train,
         test_size=0.15,
@@ -452,19 +385,16 @@ def entrainer_modele(df: pd.DataFrame):
 
     modele.fit(
         X_tr, y_tr,
-        eval_set=[(X_val, y_val)],   # Jeu de validation pour surveiller l'erreur
-        verbose=50,                  # Affiche le score tous les 50 arbres
+        eval_set=[(X_val, y_val)],   
+        verbose=50,                 
     )
 
-    # ── Nombre optimal d'arbres choisi automatiquement ────────────────────────
     nb_arbres_optimal = modele.best_iteration + 1
     print(f"\n   🌳 Early Stopping : meilleur arbre = #{nb_arbres_optimal}")
     print(f"      (sur {HYPERPARAMS_XGBOOST['n_estimators']} arbres max — "
           f"{HYPERPARAMS_XGBOOST['n_estimators'] - nb_arbres_optimal} arbres économisés)")
 
-    # ── 3.6 Validation croisée 5-fold (robustesse) ────────────────────────────
     print("\n🔁 Validation croisée 5-Fold...")
-    # On utilise un modèle identique sans early stopping pour le CV
     modele_cv = xgb.XGBClassifier(
         **{k: v for k, v in HYPERPARAMS_XGBOOST.items() if k != "eval_metric"},
         scale_pos_weight=ratio_classes,
@@ -474,7 +404,6 @@ def entrainer_modele(df: pd.DataFrame):
     print(f"   📊 Scores CV (5 folds) : {[f'{s*100:.1f}%' for s in scores_cv]}")
     print(f"   📊 Moyenne CV          : {scores_cv.mean()*100:.2f}% ± {scores_cv.std()*100:.2f}%")
 
-    # ── 3.7 Validation du score minimum ≥ 80 % ────────────────────────────────
     accuracy_cv = scores_cv.mean()
     if accuracy_cv < SEUIL_CONFIANCE_MIN:
         print(
@@ -487,10 +416,6 @@ def entrainer_modele(df: pd.DataFrame):
     print("   ✅ Entraînement terminé.")
     return modele, X_test, y_test, feature_cols
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  ÉTAPE 4 — ÉVALUATION COMPLÈTE (Metrics + Confiance + Features Importance)
-# ══════════════════════════════════════════════════════════════════════════════
 
 def evaluer_modele(
     modele: xgb.XGBClassifier,
@@ -516,9 +441,8 @@ def evaluer_modele(
     float : Accuracy sur le jeu de test (0.0 → 1.0)
     """
     y_pred  = modele.predict(X_test)
-    y_proba = modele.predict_proba(X_test)[:, 1]  # Proba de la classe Churner
+    y_proba = modele.predict_proba(X_test)[:, 1]
 
-    # Métriques standard
     accuracy  = accuracy_score(y_test, y_pred)
     precision = precision_score(y_test, y_pred, zero_division=0)
     recall    = recall_score(y_test, y_pred, zero_division=0)
@@ -544,8 +468,6 @@ def evaluer_modele(
     )
     print("═" * 62)
 
-    # ── Analyse du seuil de confiance ─────────────────────────────────────────
-    # Prédictions avec probabilité ≥ SEUIL_CONFIANCE_MIN
     masque_confiant = (y_proba >= SEUIL_CONFIANCE_MIN) | (y_proba <= (1 - SEUIL_CONFIANCE_MIN))
     nb_confiants = masque_confiant.sum()
     pct_confiants = nb_confiants / len(y_test) * 100
@@ -561,7 +483,6 @@ def evaluer_modele(
         status_conf = "✅" if acc_confiante >= SEUIL_CONFIANCE_MIN else "⚠️"
         print(f"   {status_conf} Seuil 80% {'ATTEINT' if acc_confiante >= SEUIL_CONFIANCE_MIN else 'NON ATTEINT'}")
 
-    # ── Importance des features (Top 8) ────────────────────────────────────────
     print("\n🔑 Top 8 Features les plus importantes :")
     importance_df = pd.DataFrame({
         "feature":    X_test.columns.tolist(),
@@ -577,9 +498,6 @@ def evaluer_modele(
     return accuracy
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  ÉTAPE 5 — SAUVEGARDE DU MODÈLE
-# ══════════════════════════════════════════════════════════════════════════════
 
 def sauvegarder_modele(
     modele: xgb.XGBClassifier,
@@ -631,9 +549,6 @@ def sauvegarder_modele(
     print(f"   └─ Features ({len(feature_cols)})        : {feature_cols}")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  POINT D'ENTRÉE PRINCIPAL
-# ══════════════════════════════════════════════════════════════════════════════
 
 def main():
     """
@@ -653,29 +568,23 @@ def main():
     print(f"   ⏰ Horaires bancaires : {HEURE_OUVERTURE}h → {HEURE_FERMETURE}h (Ven–Sam 8h→13h)")
     print(f"   🎯 Seuil de confiance minimum : {SEUIL_CONFIANCE_MIN*100:.0f}%")
 
-    # ── 1. Données simulées ───────────────────────────────────────────────────
     print("\n📦 Étape 1 — Génération des données mock...")
     df = generer_mock_data(n_clients=1200, seed=42)
 
-    # ── 2 + 3 + 4. Feature Engineering + Entraînement + Validation CV ─────────
     print("\n🔧 Étapes 2-4 — Feature Engineering + Entraînement + Validation...")
     modele, X_test, y_test, feature_cols = entrainer_modele(df)
 
-    # ── 5. Évaluation ──────────────────────────────────────────────────────────
     print("\n📈 Étape 5 — Évaluation complète du modèle...")
     accuracy = evaluer_modele(modele, X_test, y_test)
 
-    # ── Vérification finale du seuil métier ────────────────────────────────────
     print("\n" + "─" * 62)
     if accuracy >= SEUIL_CONFIANCE_MIN:
         print(f"✅  SEUIL MÉTIER ATTEINT : Accuracy = {accuracy*100:.2f}% ≥ {SEUIL_CONFIANCE_MIN*100:.0f}%")
     else:
         print(f"❌  SEUIL MÉTIER NON ATTEINT : Accuracy = {accuracy*100:.2f}% < {SEUIL_CONFIANCE_MIN*100:.0f}%")
         print("   → Le modèle NE SERA PAS sauvegardé. Revoyez la configuration.")
-        sys.exit(1)  # Sortie en erreur pour bloquer un pipeline CI/CD
+        sys.exit(1)  
     print("─" * 62)
-
-    # ── 6. Sauvegarde ─────────────────────────────────────────────────────────
     print("\n💾 Étape 6 — Sauvegarde du modèle...")
     sauvegarder_modele(modele, feature_cols, accuracy, chemin="modele_churn_maroc.pkl")
 

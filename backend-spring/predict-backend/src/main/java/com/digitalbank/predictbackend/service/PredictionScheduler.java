@@ -17,6 +17,6 @@ public class PredictionScheduler {
     @Scheduled(fixedRate = 60000)
     @Transactional
     public void actualiserDatesPerimees() {
-        predictionRepository.updateOldPredictions(LocalDate.now(), LocalDate.now().plusDays(1));
+        predictionRepository.updateOldPredictions(LocalDate.now(), LocalDate.now());
     }
 }

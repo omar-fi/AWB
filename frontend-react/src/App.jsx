@@ -61,7 +61,6 @@ const RootRedirect = () => {
   return <Navigate to={getRolePath(user.role)} replace />;
 };
 
-/** Écran d'erreur de rôle — affiché si aucun rôle métier n'est configuré */
 const RoleErrorScreen = ({ message }) => (
   <div style={{
     display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -101,7 +100,6 @@ const RoleErrorScreen = ({ message }) => (
   </div>
 );
 
-// ─── Application principale ──────────────────────────────────────────────────
 function App() {
   return (
     <AuthProvider>

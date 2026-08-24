@@ -7,12 +7,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration Keycloak (Alignée avec le Frontend)
-# Port 8081 est celui utilisé dans keycloak.js
 KEYCLOAK_URL = "http://localhost:8081/realms/digitalbank-realm"
 JWKS_URL = f"{KEYCLOAK_URL}/protocol/openid-connect/certs"
 
-# Swagger UI configuration
 TOKEN_URL = f"{KEYCLOAK_URL}/protocol/openid-connect/token"
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=TOKEN_URL)
 
@@ -48,7 +45,7 @@ def verify_token(token: str = Depends(oauth2_scheme)):
             token,
             rsa_key,
             algorithms=["RS256"],
-            options={"verify_aud": False} # Le frontend et le backend peuvent avoir des audiences différentes
+            options={"verify_aud": False}
         )
         return payload
         

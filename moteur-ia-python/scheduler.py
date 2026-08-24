@@ -1,12 +1,16 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
 ║         SCHEDULER DE PRÉDICTIONS NOCTURNES — AWB IA                        ║
-║         Prédiction automatique chaque nuit à 00h00 (heure Maroc)           ║
+║         Pipeline complet IA chaque nuit à 00h00 (heure Maroc)              ║
 ╠══════════════════════════════════════════════════════════════════════════════╣
 ║  Responsabilités :                                                           ║
 ║    1. Démarrer automatiquement avec l'application.                           ║
 ║    2. Attendre le prochain minuit Maroc sans recalcul au démarrage.          ║
-║    3. Déclencher le batch chaque nuit à 00h00 (UTC+1 Maroc).                ║
+║    3. Déclencher le batch chaque nuit à 00h00 (UTC+1 Maroc) :               ║
+║         → Agent 2 : Prédictions XGBoost visite pour TOUS les clients        ║
+║         → Agent 3A : LangChain LLM + SHAP (CRITIQUE/ÉLEVÉ)                 ║
+║         → Agent 3B : Déterministe + SHAP (ALERTE)                           ║
+║         → Agent 3C : Legacy agent_strategie (SURVEILLANCE)                  ║
 ║    4. Classifier chaque prédiction par horizon temporel :                    ║
 ║         AUJOURD_HUI / DEMAIN / CETTE_SEMAINE / CE_MOIS /                   ║
 ║         MOIS_PROCHAIN / PLUS_TARD                                            ║
@@ -20,9 +24,6 @@
 ╚══════════════════════════════════════════════════════════════════════════════╝
 """
 
-# ─────────────────────────────────────────────────────────────────────────────
-# IMPORTS
-# ─────────────────────────────────────────────────────────────────────────────
 import os
 import sys
 import time
@@ -35,9 +36,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION LOGGING
-# ─────────────────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [SCHEDULER] %(message)s",
@@ -49,18 +47,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("awb.scheduler")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTES
-# ─────────────────────────────────────────────────────────────────────────────
 
-# Maroc : UTC+1 en permanence (plus de changement d'heure depuis 2019)
 MAROC_UTC_OFFSET_HEURES = 1
 
-# Heure de déclenchement du batch (00h00 heure Maroc)
-HEURE_DECLENCHEMENT = 0      # 00h00
-MINUTE_DECLENCHEMENT = 0     # :00
+HEURE_DECLENCHEMENT = 0
+MINUTE_DECLENCHEMENT = 0
 
-# Icônes par horizon pour les logs
 ICONES_HORIZON = {
     "AUJOURD_HUI":  "🔴",
     "DEMAIN":       "🟠",
@@ -71,7 +63,6 @@ ICONES_HORIZON = {
     "INCONNU":      "❓",
 }
 
-# Labels lisibles pour l'affichage
 LABELS_HORIZON = {
     "AUJOURD_HUI":  "Aujourd'hui",
     "DEMAIN":       "Demain",
@@ -83,9 +74,6 @@ LABELS_HORIZON = {
 }
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  UTILITAIRE — CLASSIFICATION PAR HORIZON TEMPOREL
-# ══════════════════════════════════════════════════════════════════════════════
 
 def classifier_horizon(date_prevue) -> str:
     """
@@ -113,7 +101,6 @@ def classifier_horizon(date_prevue) -> str:
     today = datetime.date.today()
     try:
         if isinstance(date_prevue, str):
-            # Accepte "YYYY-MM-DD" et "YYYY-MM-DD HH:MM:SS"
             target = datetime.datetime.strptime(date_prevue[:10], "%Y-%m-%d").date()
         elif isinstance(date_prevue, datetime.datetime):
             target = date_prevue.date()
@@ -127,7 +114,7 @@ def classifier_horizon(date_prevue) -> str:
     delta = (target - today).days
 
     if delta < 0:
-        return "AUJOURD_HUI"    # Date passée → traiter en urgence aujourd'hui
+        return "AUJOURD_HUI"
     elif delta == 0:
         return "AUJOURD_HUI"
     elif delta == 1:
@@ -142,9 +129,6 @@ def classifier_horizon(date_prevue) -> str:
         return "PLUS_TARD"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  CLASSE PRINCIPALE — PredictionScheduler
-# ══════════════════════════════════════════════════════════════════════════════
 
 class PredictionScheduler:
     """
@@ -164,16 +148,14 @@ class PredictionScheduler:
     def __init__(self):
         self._stop_event   = threading.Event()
         self._thread       = None
-        self._batch_lock   = threading.Lock()   # Empêche deux batches simultanés
+        self._batch_lock   = threading.Lock()
 
-        # Métriques internes (accessibles depuis l'extérieur)
-        self.dernier_batch_ok  = None
-        self.nb_batches_total  = 0
-        self.heure_dernier_run = "Jamais"
+        self.dernier_batch_ok      = None
+        self.nb_batches_total      = 0
+        self.heure_dernier_run     = "Jamais"
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  API PUBLIQUE
-    # ─────────────────────────────────────────────────────────────────────────
+        self.dernier_batch_resultats: dict = {}
+
 
     def demarrer(self, executer_maintenant: bool = False) -> None:
         """
@@ -193,13 +175,12 @@ class PredictionScheduler:
         self._thread = threading.Thread(
             target=self._boucle_principale,
             name="AWB-Prediction-Scheduler",
-            daemon=True,  # Le thread s'arrête avec le processus principal
+            daemon=True,
         )
         self._thread.start()
         logger.info("🟢 Scheduler démarré (thread daemon : AWB-Prediction-Scheduler)")
 
         if executer_maintenant:
-            # Lancer le batch initial dans un thread séparé pour ne pas bloquer
             threading.Thread(
                 target=self._executer_batch_complet,
                 args=("DEMARRAGE",),
@@ -236,11 +217,9 @@ class PredictionScheduler:
             "nb_batches_total":   self.nb_batches_total,
             "heure_dernier_run":  self.heure_dernier_run,
             "prochain_batch":     f"Dans {h}h {m}min (minuit Maroc)",
+            "dernier_batch":      self.dernier_batch_resultats,
         }
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  BOUCLE INTERNE
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _boucle_principale(self) -> None:
         """
@@ -257,7 +236,6 @@ class PredictionScheduler:
                 f"(minuit heure Maroc — {self._heure_maroc_actuelle()})"
             )
 
-            # Attente interruptible : le sleep se termine si _stop_event est levé
             self._stop_event.wait(timeout=secs)
 
             if not self._stop_event.is_set():
@@ -265,9 +243,13 @@ class PredictionScheduler:
 
     def _executer_batch_complet(self, declencheur: str = "SCHEDULED") -> None:
         """
-        Exécute le batch de prédictions pour tous les clients,
-        puis affiche la distribution par horizon temporel.
+        Exécute le pipeline IA nocturne complet :
+          1. Agent 2  → Prédictions XGBoost (visite) pour tous les clients
+          2. Agent 3A → LangChain LLM + SHAP (clients CRITIQUE / ÉLEVÉ)
+          3. Agent 3B → Déterministe + SHAP (clients ALERTE)
+          4. Agent 3C → Legacy agent_strategie (clients SURVEILLANCE)
 
+        Puis affiche la distribution par horizon temporel.
         Le verrou `_batch_lock` garantit qu'un seul batch tourne à la fois.
 
         Paramètres
@@ -282,36 +264,43 @@ class PredictionScheduler:
         try:
             ts_debut = datetime.datetime.now()
             logger.info("=" * 60)
-            logger.info(f"🌙 [{declencheur}] BATCH DE PRÉDICTIONS — {ts_debut.strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(
+                f"🌙 [{declencheur}] BATCH NOCTURNE IA — "
+                f"{ts_debut.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            logger.info("   Pipeline : Agent 2 (XGBoost) → Agent 3 (LangChain + SHAP)")
             logger.info("=" * 60)
 
-            # ── Lancement du batch principal ──────────────────────────────────
+            resultats = {}
             try:
                 from nightly_batch import main as batch_main
-                batch_main()
-                self.dernier_batch_ok = True
+                resultats = batch_main()
+                self.dernier_batch_ok       = resultats.get("success", False)
+                self.dernier_batch_resultats = resultats
             except Exception as e:
-                logger.error(f"❌ Erreur lors du batch principal : {e}")
-                self.dernier_batch_ok = False
+                logger.error(f"❌ Erreur critique batch nocturne : {e}")
+                self.dernier_batch_ok        = False
+                self.dernier_batch_resultats = {"success": False, "error": str(e)}
                 return
 
-            # ── Classification par horizon ─────────────────────────────────────
             self._afficher_distribution_horizons()
 
-            # ── Métriques ─────────────────────────────────────────────────────
             duree = (datetime.datetime.now() - ts_debut).total_seconds()
             self.nb_batches_total  += 1
             self.heure_dernier_run  = ts_debut.strftime("%Y-%m-%d %H:%M:%S")
 
-            logger.info(f"✅ [{declencheur}] Batch terminé en {duree:.1f}s — Batch #{self.nb_batches_total}")
+            a2 = resultats.get("agent2", {})
+            a3 = resultats.get("agent3", {})
+            logger.info(
+                f"✅ [{declencheur}] Batch #{self.nb_batches_total} terminé en {duree:.1f}s | "
+                f"Agent2 OK={a2.get('nb_ok', '?')} | "
+                f"Agent3 OK={a3.get('total_ok', '?')} KO={a3.get('total_ko', '?')}"
+            )
             logger.info("=" * 60)
 
         finally:
             self._batch_lock.release()
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  DISTRIBUTION PAR HORIZON TEMPOREL
-    # ─────────────────────────────────────────────────────────────────────────
 
     def _afficher_distribution_horizons(self) -> None:
         """
@@ -347,7 +336,6 @@ class PredictionScheduler:
             logger.info("📭 Aucune prédiction en base pour l'analyse des horizons.")
             return
 
-        # ── Classification de chaque prédiction ──────────────────────────────
         compteurs = {k: 0 for k in ICONES_HORIZON}
         clients_par_horizon = {k: [] for k in ICONES_HORIZON}
 
@@ -362,7 +350,6 @@ class PredictionScheduler:
                 "risque": pred.get("niveau_risque", "?"),
             })
 
-        # ── Affichage du rapport ──────────────────────────────────────────────
         total = len(predictions)
         logger.info(f"\n📊 DISTRIBUTION DES PRÉDICTIONS PAR HORIZON — {total} clients")
         logger.info("─" * 60)
@@ -376,7 +363,6 @@ class PredictionScheduler:
             barre = "█" * int(pct / 3)
             logger.info(f"   {icone} {label:<25s} : {nb:4d} clients ({pct:5.1f}%) {barre}")
 
-        # ── Détail AUJOURD'HUI et DEMAIN (priorité maximale) ─────────────────
         for prioritaire in ["AUJOURD_HUI", "DEMAIN"]:
             liste = clients_par_horizon.get(prioritaire, [])
             if not liste:
@@ -384,7 +370,7 @@ class PredictionScheduler:
             icone = ICONES_HORIZON[prioritaire]
             label = LABELS_HORIZON[prioritaire]
             logger.info(f"\n   {icone} PRIORITÉ — Clients prévus {label.upper()} :")
-            for c in liste[:10]:  # Affiche max 10 clients
+            for c in liste[:10]:
                 logger.info(
                     f"      • Client {c['client_id']:>5} | "
                     f"Score: {c['score']:5.1f}% | "
@@ -397,9 +383,6 @@ class PredictionScheduler:
 
         logger.info("─" * 60)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    #  UTILITAIRES INTERNES
-    # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _heure_maroc_actuelle() -> str:
@@ -420,15 +403,12 @@ class PredictionScheduler:
         prochain_minuit = (now_maroc + datetime.timedelta(days=1)).replace(
             hour=HEURE_DECLENCHEMENT,
             minute=MINUTE_DECLENCHEMENT,
-            second=5,       # +5 secondes de marge pour éviter les edge cases
+            second=5,
             microsecond=0,
         )
         return max(1.0, (prochain_minuit - now_maroc).total_seconds())
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  SINGLETON GLOBAL — Importable par main.py et toute autre couche
-# ══════════════════════════════════════════════════════════════════════════════
 
 _SCHEDULER_INSTANCE: PredictionScheduler = None
 
@@ -467,9 +447,6 @@ def demarrer_scheduler_background(executer_maintenant: bool = False) -> Predicti
     return scheduler
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  POINT D'ENTRÉE — MODE DAEMON STANDALONE
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _handler_signal(sig, frame):
     """Gestion propre des signaux SIGINT (Ctrl+C) et SIGTERM."""
@@ -489,7 +466,6 @@ if __name__ == "__main__":
     Arrêt :
         Ctrl+C  ou  kill <PID>
     """
-    # Gestion propre des signaux système
     signal.signal(signal.SIGINT,  _handler_signal)
     signal.signal(signal.SIGTERM, _handler_signal)
 
@@ -499,13 +475,11 @@ if __name__ == "__main__":
     logger.info(f"   PID           : {os.getpid()}")
     logger.info("═" * 60)
 
-    # Démarrage du scheduler : l'agent attend le prochain minuit Maroc.
     sched = demarrer_scheduler_background(executer_maintenant=False)
 
-    # Boucle principale — affiche le statut toutes les 30 minutes
     try:
         while True:
-            time.sleep(1800)  # Log de statut toutes les 30 min
+            time.sleep(1800)
             statut = sched.statut()
             logger.info(
                 f"📌 STATUT | Actif: {statut['actif']} | "
